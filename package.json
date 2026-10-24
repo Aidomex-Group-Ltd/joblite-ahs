@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --assets ./dist/client",
+    "dev": "wrangler dev --config wrangler.toml --assets ./dist/client",
     "build": "vite build",
     "preview": "wrangler dev --remote=false",
     "typecheck": "tsc --noEmit",
@@ -14,7 +14,7 @@
     "migrate:local": "wrangler d1 migrations apply joblite-db --local --config wrangler.toml",
     "migrate:preview": "wrangler d1 migrations apply joblite-db --remote --env preview --config wrangler.toml",
     "sync:local": "bash scripts/sync-local.sh",
-    "deploy": "wrangler deploy --assets ./dist/client"
+    "deploy": "wrangler deploy --config wrangler.toml --assets ./dist/client --keep-vars"
   },
   "dependencies": {
     "hono": "^4.6.3",

@@ -10,7 +10,7 @@ Last updated: 2026-10-24
 - [x] Additive D1 provenance/deduplication schema and paginated/searchable jobs API; authenticated local sync command
 - [x] Wrangler dev/deploy scripts explicitly serve `dist/client` assets
 
-**Local sync evidence:** authenticated local sync ran against the development Worker and D1 after migration verification: 6 provider sources succeeded, 1 was skipped due to Remotive's six-hour interval, 0 failed; 13 jobs inserted and 472 existing records updated. Production D1 inspection was blocked by Cloudflare API authentication (error 10000); production migration/deployment were not completed.
+**Sync evidence:** authenticated local sync ran against the development Worker and D1: 6 provider sources succeeded, 1 was skipped due to Remotive's six-hour interval, 0 failed; 13 jobs inserted and 472 existing records updated. Production D1 has migrations `0003` and `0004` applied. The Cloudflare OAuth token intermittently failed a migration-history read (error 10000), while the authorized migration apply succeeded.
 
 **Empty-feed root cause:** the prior home page only fetched community posts and never requested the existing jobs API. The updated home feed now requests the paginated jobs endpoint and merges real job records with posts; provider sync populates/refreshed its stored catalog.
 
