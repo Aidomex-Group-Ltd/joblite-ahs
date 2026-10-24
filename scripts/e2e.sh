@@ -13,8 +13,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 npm run build
-npx wrangler d1 migrations apply joblite-db --local --config wrangler.toml --persist-to "$STATE_DIR"
-npx wrangler d1 execute joblite-db --local --config wrangler.toml --persist-to "$STATE_DIR" --file scripts/e2e-seed.sql
+CI=true echo "y" | npx wrangler d1 migrations apply joblite-db --local --config wrangler.toml --persist-to "$STATE_DIR"
+npx wrangler d1 execute joblite-db --local --config wrangler.toml --persist-to "$STATE_DIR" --file scripts/e2e-seed.sql --yes
 setsid npx wrangler dev --config wrangler.toml --assets ./dist/client --persist-to "$STATE_DIR" --ip 127.0.0.1 --port "$E2E_PORT" \
   --var ENVIRONMENT:test --var APP_URL:"http://127.0.0.1:$E2E_PORT" --var TEST_MAIL_SINK:enabled \
   --var SESSION_SECRET:isolated-e2e-session-secret --var CSRF_SECRET:isolated-e2e-csrf-secret \

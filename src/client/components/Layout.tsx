@@ -27,6 +27,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <nav className="jl-top-links" aria-label="Account navigation">
         <Link to="/notifications" aria-label="Notifications">Notifications{unreadNotifications > 0 ? ` (${unreadNotifications})` : ''}</Link>
         <Link to={user ? '/settings' : '/sign-in'}>{user ? 'Account' : 'Sign in'}</Link>
+        {!user && <Link to="/signup" className="btn-sm btn-primary" style={{ padding: '6px 12px', borderRadius: '8px', textDecoration: 'none' }}>Sign up</Link>}
       </nav>
     </header>
     <div className="jl-site-content">

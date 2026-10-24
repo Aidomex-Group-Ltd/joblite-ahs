@@ -25,17 +25,42 @@ export type Membership = {
   verification_state: string
 }
 
+export type SessionOnboarding = {
+  status: 'in_progress' | 'completed' | 'skipped'
+  current_step: number
+  account_type: 'candidate' | 'employer' | 'both' | null
+  country_code: string | null
+  city: string | null
+  desired_role: string | null
+  skills: string[]
+  work_preference: 'remote' | 'hybrid' | 'on-site' | 'any' | null
+  employment_types: string[]
+  experience_level: string | null
+  organization_name: string | null
+  organization_country: string | null
+  organization_city: string | null
+  organization_website: string | null
+  expected_roles: string | null
+  employer_title: string | null
+  job_alerts_enabled: boolean
+  notification_channels: string[]
+  alert_frequency: string
+  completed_at: number | null
+}
+
 type MeResponse = {
   user: SessionUser
   profile: SessionProfile | null
   memberships: Membership[]
   unread_notifications: number
+  onboarding?: SessionOnboarding | null
 }
 
 type SessionState = {
   user: SessionUser | null
   profile: SessionProfile | null
   memberships: Membership[]
+  onboarding: SessionOnboarding | null
   unreadNotifications: number
   loading: boolean
   error: string | null
@@ -50,6 +75,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null)
   const [profile, setProfile] = useState<SessionProfile | null>(null)
   const [memberships, setMemberships] = useState<Membership[]>([])
+  const [onboarding, setOnboarding] = useState<SessionOnboarding | null>(null)
   const [unreadNotifications, setUnreadNotifications] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -60,6 +86,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setUser(response.data.user)
       setProfile(response.data.profile)
       setMemberships(response.data.memberships || [])
+      setOnboarding(response.data.onboarding || null)
       setUnreadNotifications(response.data.unread_notifications || 0)
       setError(null)
     } catch (caught) {
@@ -68,6 +95,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         setUser(null)
         setProfile(null)
         setMemberships([])
+        setOnboarding(null)
         setUnreadNotifications(0)
         setError(null)
       } else {
@@ -89,6 +117,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setUser(null)
       setProfile(null)
       setMemberships([])
+      setOnboarding(null)
       setUnreadNotifications(0)
     }
   }, [])
@@ -98,6 +127,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       user,
       profile,
       memberships,
+      onboarding,
       unreadNotifications,
       loading,
       error,
@@ -105,7 +135,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setUnreadNotifications,
       signOut,
     }),
-    [user, profile, memberships, unreadNotifications, loading, error, refresh, signOut]
+    [user, profile, memberships, onboarding, unreadNotifications, loading, error, refresh, signOut]
   )
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>

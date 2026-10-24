@@ -17,6 +17,7 @@ import health from './routes/health'
 import boards from './routes/boards'
 import profiles from './routes/profiles'
 import legal from './routes/legal'
+import skills from './routes/skills'
 import { DEFAULT_METADATA, metadataHeadMarkup, SITE_ORIGIN, type PageMetadata } from '../shared/page-metadata'
 
 const app = new Hono<AppContext>()
@@ -50,6 +51,7 @@ app.route('/api/v1/offers', offers)
 app.route('/api/v1/organizations', organizations)
 app.route('/api/v1/applications', applications)
 app.route('/api/v1/media', media)
+app.route('/api/v1/skills', skills)
 
 // API failures must stay machine-readable instead of falling through to the SPA shell.
 app.onError((error, c) => {

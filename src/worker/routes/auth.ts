@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { nanoid } from 'nanoid'
 import { clearedSessionCookie, sessionCookie, shouldUseSecureCookie } from '../middleware/security'
+import { sanitizeText, slugify } from '../lib/validate'
 import { CURRENT_TERMS_VERSION } from '../../shared/legal-versions'
 
 const app = new Hono<AppContext>()
@@ -151,6 +152,13 @@ app.post('/verify', async (c) => {
   if (!existingUser && body.age_confirmed !== true) {
     return c.json({ error: { code: 'AGE_CONFIRMATION_REQUIRED', message: 'Confirm that you are at least 18 to create a Joblite account. Your verification code is still valid.' } }, 428)
   }
+  const displayName = typeof body.display_name === 'string' && body.display_name.trim().length >= 2
+    ? sanitizeText(body.display_name, 80)
+    : null
+  const onboarding = existingUser ? null : await validateOnboarding(c.env.DB, body.onboarding)
+  if (!existingUser && !onboarding && !displayName) {
+    return c.json({ error: { code: 'ONBOARDING_REQUIRED', message: 'Complete the account setup questions to create your Joblite account.' } }, 428)
+  }
 
   // This conditional update is the single-use lock. Concurrent correct requests
   // race on the same row; exactly one can consume the challenge and create a session.
@@ -160,9 +168,12 @@ app.post('/verify', async (c) => {
   if ((consumed.meta?.changes ?? 0) !== 1) return invalidCode(c)
 
   const newUserId = nanoid()
+  const profileId = existingUser ? null : nanoid()
+  const handle = existingUser ? null : await uniqueProfileHandle(c.env.DB, challenge.email_normalized)
+  const resolvedDisplayName = onboarding?.displayName || displayName || challenge.email_normalized.split('@')[0]
   const records = [
-    c.env.DB.prepare('INSERT OR IGNORE INTO users (id, email_normalized, verified_at, created_at, updated_at) VALUES (?,?,?,?,?)')
-      .bind(newUserId, challenge.email_normalized, now, now, now),
+    c.env.DB.prepare('INSERT OR IGNORE INTO users (id, email_normalized, verified_at, display_name, created_at, updated_at) VALUES (?,?,?,?,?,?)')
+      .bind(newUserId, challenge.email_normalized, now, resolvedDisplayName, now, now),
   ]
   if (!existingUser && termsAccepted) {
     records.push(c.env.DB.prepare(
@@ -177,6 +188,22 @@ app.post('/verify', async (c) => {
       `INSERT OR IGNORE INTO legal_records (id, user_id, document_id, document_version, action, region, language, created_at)
        SELECT ?, id, 'age-attestation', 'age-policy-v1-2026-10-24-draft', 'acceptance', ?, ?, ? FROM users WHERE email_normalized = ?`
     ).bind(nanoid(), challenge.presented_region || 'unknown', challenge.language || 'en', now, challenge.email_normalized))
+    records.push(c.env.DB.prepare(
+      `INSERT OR IGNORE INTO profiles (id, user_id, handle, headline, country_code, visibility, availability, created_at, updated_at)
+       SELECT ?, id, ?, ?, ?, 'public', ?, ?, ? FROM users WHERE email_normalized = ?`
+    ).bind(profileId!, handle!, onboarding?.desiredRole || null, onboarding?.countryCode || null, onboarding?.availability || null, now, now, challenge.email_normalized))
+
+    if (onboarding) {
+      records.push(c.env.DB.prepare(
+        `INSERT INTO user_onboarding (user_id, status, current_step, account_type, experience_level, desired_role, employer_title, organization_name, completed_at, created_at, updated_at)
+         SELECT id, 'completed', 3, ?, ?, ?, ?, ?, ?, ?, ? FROM users WHERE email_normalized = ?`
+      ).bind(onboarding.accountType, onboarding.experienceLevel, onboarding.desiredRole, onboarding.employerTitle, onboarding.organizationName, now, now, now, challenge.email_normalized))
+    } else {
+      records.push(c.env.DB.prepare(
+        `INSERT INTO user_onboarding (user_id, status, current_step, account_type, completed_at, created_at, updated_at)
+         SELECT id, 'in_progress', 1, 'candidate', 0, ?, ? FROM users WHERE email_normalized = ?`
+      ).bind(now, now, challenge.email_normalized))
+    }
   }
   await c.env.DB.batch(records)
   const user = await c.env.DB.prepare('SELECT id, email_normalized, state, display_name FROM users WHERE email_normalized = ?')
@@ -302,6 +329,55 @@ function validRegion(value: unknown): string {
 
 function validLanguage(value: unknown): string {
   return typeof value === 'string' && /^[a-z]{2}(-[A-Z]{2})?$/.test(value) ? value : 'en'
+}
+
+type OnboardingInput = {
+  accountType: 'candidate' | 'employer' | 'both'
+  displayName: string
+  countryCode: string
+  desiredRole: string | null
+  experienceLevel: string | null
+  availability: string | null
+  employerTitle: string | null
+  organizationName: string | null
+}
+
+async function validateOnboarding(db: D1Database, input: unknown): Promise<OnboardingInput | null> {
+  if (!input || typeof input !== 'object') return null
+  const value = input as Record<string, unknown>
+  const accountType = value.account_type
+  if (!['candidate', 'employer', 'both'].includes(String(accountType))) return null
+  const isCandidate = accountType === 'candidate' || accountType === 'both'
+  const isEmployer = accountType === 'employer' || accountType === 'both'
+  const displayName = sanitizeText(value.display_name, 80)
+  const countryCode = typeof value.country_code === 'string' ? value.country_code.toUpperCase() : ''
+  const desiredRole = sanitizeText(value.desired_role, 120)
+  const experienceLevel = typeof value.experience_level === 'string' ? value.experience_level : ''
+  const availability = sanitizeText(value.availability, 80)
+  const employerTitle = sanitizeText(value.employer_title, 100)
+  const organizationName = sanitizeText(value.organization_name, 120)
+  if (displayName.length < 2 || !/^[A-Z]{2}$/.test(countryCode)) return null
+  if (isCandidate && desiredRole.length < 2) return null
+  if (isCandidate && experienceLevel && !['student','entry','mid','senior','executive','career_change','not_sure'].includes(experienceLevel)) return null
+  if (isEmployer && (employerTitle.length < 2 || organizationName.length < 2)) return null
+  const country = await db.prepare('SELECT code FROM countries WHERE code = ?').bind(countryCode).first<{ code: string }>()
+  if (!country) return null
+  return {
+    accountType: accountType as OnboardingInput['accountType'],
+    displayName,
+    countryCode,
+    desiredRole: isCandidate ? desiredRole : null,
+    experienceLevel: isCandidate && experienceLevel ? experienceLevel : null,
+    availability: isCandidate ? availability || null : null,
+    employerTitle: isEmployer ? employerTitle : null,
+    organizationName: isEmployer ? organizationName : null,
+  }
+}
+
+async function uniqueProfileHandle(db: D1Database, email: string): Promise<string> {
+  const base = slugify(email.split('@')[0] || 'member', 24) || 'member'
+  const existing = await db.prepare('SELECT id FROM profiles WHERE handle = ?').bind(base).first()
+  return existing ? `${base.slice(0, 18)}-${nanoid(5).toLowerCase()}` : base
 }
 
 export default app

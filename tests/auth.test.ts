@@ -25,7 +25,7 @@ describe('passwordless email authentication', () => {
     return db.prepare('SELECT code, challenge_id FROM auth_test_mail WHERE email_normalized = ? ORDER BY created_at DESC LIMIT 1').bind(email).first<{ code: string; challenge_id: string }>()
   }
   async function verifyCode(challengeId: string | undefined, code: string | undefined, accepted = true) {
-    return api(env)('/auth/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge_id: challengeId, code, terms_accepted: accepted, terms_version: 'terms-v1-2026-10-24-draft', age_confirmed: accepted }) })
+    return api(env)('/auth/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge_id: challengeId, code, terms_accepted: accepted, terms_version: 'terms-v1-2026-10-24-draft', age_confirmed: accepted, onboarding: { account_type: 'candidate', display_name: 'Taylor Example', country_code: 'UG', desired_role: 'Product designer', experience_level: 'mid' } }) })
   }
 
   it('creates one account after a successful test-mail verification and supports existing-account sign-in', async () => {
@@ -44,6 +44,10 @@ describe('passwordless email authentication', () => {
     expect(cookie).toContain('SameSite=Strict')
     const count = await db.prepare('SELECT COUNT(*) as total FROM users WHERE email_normalized = ?').bind('person@example.test').first<{ total: number }>()
     expect(count?.total).toBe(1)
+    const onboarding = await db.prepare('SELECT account_type, experience_level, desired_role FROM user_onboarding WHERE user_id = (SELECT id FROM users WHERE email_normalized = ?)').bind('person@example.test').first<{ account_type: string; experience_level: string; desired_role: string }>()
+    expect(onboarding).toEqual({ account_type: 'candidate', experience_level: 'mid', desired_role: 'Product designer' })
+    const profile = await db.prepare('SELECT headline, country_code FROM profiles WHERE user_id = (SELECT id FROM users WHERE email_normalized = ?)').bind('person@example.test').first<{ headline: string; country_code: string }>()
+    expect(profile).toEqual({ headline: 'Product designer', country_code: 'UG' })
     await db.prepare('UPDATE auth_challenges SET created_at = created_at - 120 WHERE email_normalized = ?').bind('person@example.test').run()
     await db.prepare('UPDATE auth_test_mail SET created_at = created_at - 120 WHERE email_normalized = ?').bind('person@example.test').run()
     await requestCode()
@@ -51,6 +55,22 @@ describe('passwordless email authentication', () => {
     const second = await verifyCode(secondMail?.challenge_id, secondMail?.code)
     expect(second.status).toBe(200)
     expect((await db.prepare('SELECT COUNT(*) as total FROM users WHERE email_normalized = ?').bind('person@example.test').first<{ total: number }>())?.total).toBe(1)
+  })
+
+  it('requires profile setup and ensures role selection does not grant privilege escalation or organization membership', async () => {
+    const requested = await requestCode('founder@example.test')
+    const mail = (await readCode('founder@example.test'))!
+    const incomplete = await api(env)('/auth/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge_id: mail.challenge_id, code: mail.code, terms_accepted: true, terms_version: 'terms-v1-2026-10-24-draft', age_confirmed: true }) })
+    expect(requested.response.status).toBe(200)
+    expect(incomplete.status).toBe(428)
+    expect((await incomplete.json() as any).error.code).toBe('ONBOARDING_REQUIRED')
+    const created = await api(env)('/auth/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge_id: mail.challenge_id, code: mail.code, terms_accepted: true, terms_version: 'terms-v1-2026-10-24-draft', age_confirmed: true, onboarding: { account_type: 'employer', display_name: 'Taylor Example', country_code: 'UG', organization_name: 'North Star Studio', employer_title: 'Founder' } }) })
+    expect(created.status).toBe(200)
+    // Selecting "Hire talent" must not grant organization membership or administrative privileges
+    const membership = await db.prepare("SELECT m.role FROM memberships m WHERE m.user_id = (SELECT id FROM users WHERE email_normalized = ?)").bind('founder@example.test').first<{ role: string }>()
+    expect(membership).toBeNull()
+    const onboarding = await db.prepare("SELECT account_type, organization_name, employer_title FROM user_onboarding WHERE user_id = (SELECT id FROM users WHERE email_normalized = ?)").bind('founder@example.test').first<{ account_type: string; organization_name: string; employer_title: string }>()
+    expect(onboarding).toEqual({ account_type: 'employer', organization_name: 'North Star Studio', employer_title: 'Founder' })
   })
 
   it('rejects bad, expired, reused, and superseded codes', async () => {

@@ -143,6 +143,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .jl-auth-legal-checks input { width: 18px; min-height: 18px; flex: 0 0 18px; margin-top: 3px; }
 .jl-auth-legal-checks p { margin: 0; color: var(--jl-muted); font-size: 13px; }
 .jl-auth-legal-checks a { color: var(--jl-blue); text-decoration: underline; }
+.jl-onboarding-step { display: grid; gap: 14px; padding: 14px; border: 1px solid var(--jl-line); border-radius: 14px; background: #fbfdff; }
+.jl-onboarding-kicker { margin: 0; color: var(--jl-blue); font-size: 12px; font-weight: 800; letter-spacing: .08em; }
+.jl-onboarding-step > label, .jl-onboarding-fields > label { display: grid; gap: 7px; font-size: 14px; font-weight: 700; }
+.jl-onboarding-step input:not([type="radio"]):not([type="checkbox"]), .jl-onboarding-step select { width: 100%; min-height: 48px; padding: 10px 12px; border: 1px solid #dce5f1; border-radius: 10px; color: var(--jl-navy); background: white; }
+.jl-onboarding-step small { color: var(--jl-muted); font-size: 12px; font-weight: 450; }
+.jl-account-type { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; }
+.jl-account-type legend { margin-bottom: 8px; font-size: 15px; font-weight: 750; }
+.jl-account-type > label { display: flex; min-height: 58px; align-items: center; gap: 11px; padding: 10px 12px; border: 1px solid var(--jl-line); border-radius: 11px; background: white; cursor: pointer; }
+.jl-account-type > label.is-selected { border-color: #79b4ff; background: #eff7ff; box-shadow: 0 0 0 1px #79b4ff; }
+.jl-account-type input[type="radio"] { width: 20px; height: 20px; min-height: 20px; flex: 0 0 20px; margin: 0; accent-color: var(--jl-blue); }
+.jl-account-type span { display: grid; gap: 1px; }
+.jl-account-type strong { font-size: 14px; }
+.jl-account-type small { color: var(--jl-muted); font-size: 12px; font-weight: 450; }
+.jl-onboarding-fields { display: grid; gap: 12px; padding: 12px; border: 1px solid var(--jl-line); border-radius: 11px; background: white; }
+.jl-onboarding-optional { color: var(--jl-muted); font-size: 12px; font-weight: 500; }
+.jl-onboarding-note { color: #775413 !important; }
+.jl-onboarding-step .jl-auth-legal-checks { margin-top: 2px; }
 @media print { .jl-site-header, .jl-site-sidebar, .jl-site-aside, .jl-mobile-nav, .jl-global-footer, .jl-privacy-trigger, .jl-legal-region select, .jl-privacy-requests form, .jl-privacy-requests button { display: none !important; } .jl-site-content { display: block; width: 100%; padding: 0; } .jl-legal-content, .card { box-shadow: none; border: 0; } a { color: inherit; text-decoration: underline; } }
 
 @media (max-width: 900px) {
@@ -221,3 +238,456 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .jl-notification > button { grid-column: 2; justify-self: start; }
   .jl-app .jl-fab { width: 44px; height: 44px; min-height: 44px; }
 }
+
+/* Signup & Onboarding Flow Styling */
+.jl-signup-page, .jl-onboarding-page {
+  padding: 32px 16px 64px;
+  display: flex;
+  justify-content: center;
+}
+.jl-signup-container, .jl-onboarding-container {
+  width: 100%;
+  max-width: 540px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.jl-signup-header {
+  text-align: center;
+  margin-bottom: 4px;
+}
+.jl-signup-logo-link {
+  display: inline-block;
+  margin-bottom: 12px;
+}
+.jl-signup-brand-logo {
+  border-radius: 14px;
+  box-shadow: 0 4px 14px rgb(7 31 86 / 15%);
+}
+.jl-signup-title, .jl-onboarding-title {
+  margin: 0 0 8px;
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1.25;
+  color: var(--jl-navy);
+  letter-spacing: -0.5px;
+}
+.jl-signup-subtitle, .jl-onboarding-description {
+  margin: 0;
+  font-size: 16px;
+  color: var(--jl-muted);
+  line-height: 1.5;
+}
+.jl-signup-card, .jl-onboarding-card {
+  border: 1px solid var(--jl-line);
+  border-radius: var(--jl-radius-card);
+  background: var(--jl-surface);
+  box-shadow: var(--jl-shadow);
+  padding: 28px;
+}
+.jl-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.jl-form-field label {
+  font-weight: 650;
+  font-size: 15px;
+  color: var(--jl-navy);
+}
+.jl-form-field input, .jl-form-field select, .jl-form-field textarea {
+  width: 100%;
+  min-height: 48px;
+  padding: 11px 14px;
+  border: 1px solid #dce5f1;
+  border-radius: 10px;
+  color: var(--jl-navy);
+  background: #fff;
+  font-size: 16px;
+  box-sizing: border-box;
+}
+.jl-form-field input:focus, .jl-form-field select:focus, .jl-form-field textarea:focus {
+  border-color: var(--jl-blue);
+  box-shadow: 0 0 0 3px rgb(8 124 255 / 15%);
+}
+.jl-signup-consent-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 18px 0 24px;
+}
+.jl-consent-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--jl-navy);
+  cursor: pointer;
+}
+.jl-consent-item input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.jl-signup-submit-btn {
+  width: 100%;
+  min-height: 48px;
+  font-size: 16px;
+  font-weight: 700;
+}
+.jl-signup-footer-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+  text-align: center;
+}
+.jl-signup-switch {
+  margin: 0;
+  font-size: 15px;
+  color: var(--jl-muted);
+}
+.jl-signup-browse-link {
+  color: var(--jl-blue);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.jl-signup-browse-link:hover {
+  text-decoration: underline;
+}
+.jl-auth-error-banner {
+  padding: 12px 16px;
+  border-radius: 10px;
+  color: #9b2626;
+  background: #fff0f0;
+  border: 1px solid #fedcdc;
+  margin-bottom: 16px;
+  font-size: 14.5px;
+}
+.jl-auth-notice-banner {
+  padding: 12px 16px;
+  border-radius: 10px;
+  color: #0b5394;
+  background: #f0f7ff;
+  border: 1px solid #d4e7ff;
+  margin-bottom: 16px;
+  font-size: 14.5px;
+}
+.jl-verification-intro {
+  margin-bottom: 18px;
+}
+.jl-verification-intro h3 {
+  margin: 0 0 6px;
+  font-size: 20px;
+}
+
+/* Onboarding Progress Track */
+.jl-onboarding-progress-track {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 12px;
+}
+.jl-progress-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--jl-muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+.jl-progress-step.is-active {
+  color: var(--jl-blue);
+}
+.jl-step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #eaf1fb;
+  color: var(--jl-muted);
+  font-size: 13px;
+  font-weight: 750;
+}
+.jl-progress-step.is-active .jl-step-number {
+  background: var(--jl-blue);
+  color: #fff;
+}
+.jl-progress-line {
+  flex: 1;
+  height: 2px;
+  background: var(--jl-line);
+  margin: 0 12px;
+}
+
+/* Step 1 Goal Selector */
+.jl-goal-selector {
+  border: 0;
+  padding: 0;
+  margin: 18px 0 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.jl-goal-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px;
+  border: 2px solid var(--jl-line);
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color .15s ease, background-color .15s ease;
+}
+.jl-goal-card:hover {
+  border-color: #b7d5fa;
+  background: #fbfdff;
+}
+.jl-goal-card.is-selected {
+  border-color: var(--jl-blue);
+  background: #f0f7ff;
+}
+.jl-goal-card input[type="radio"] {
+  width: 20px;
+  height: 20px;
+  margin-top: 3px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.jl-goal-card-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.jl-goal-card-title {
+  font-size: 17px;
+  font-weight: 750;
+  color: var(--jl-navy);
+}
+.jl-goal-card-desc {
+  font-size: 14px;
+  color: var(--jl-muted);
+  line-height: 1.45;
+}
+.jl-goal-disclaimer {
+  font-size: 12px;
+  color: #775413 !important;
+}
+
+/* Step 2 Preferences */
+.jl-country-picker-row {
+  display: flex;
+  gap: 8px;
+}
+.jl-btn-location {
+  white-space: nowrap;
+  font-size: 14px;
+  min-height: 48px;
+  padding: 8px 12px;
+}
+.jl-skill-input-container {
+  display: flex;
+  gap: 8px;
+}
+.jl-add-skill-btn {
+  min-height: 48px;
+  padding: 0 16px;
+}
+.jl-skill-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.jl-suggestion-chip {
+  background: #edf4fe;
+  border: 1px solid #d0e2fb;
+  color: var(--jl-blue);
+  border-radius: 16px;
+  padding: 4px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .12s;
+}
+.jl-suggestion-chip:hover {
+  background: #d8e8fc;
+}
+.jl-skill-chips-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.jl-skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 16px;
+  background: var(--jl-navy);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 550;
+}
+.jl-skill-chip button {
+  background: transparent;
+  border: 0;
+  color: #cad8ee;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.jl-skill-chip button:hover {
+  color: #fff;
+}
+.jl-radio-chips-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.jl-chip-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border: 1.5px solid var(--jl-line);
+  border-radius: 10px;
+  background: #fff;
+  font-size: 14.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.jl-chip-choice.is-selected {
+  border-color: var(--jl-blue);
+  background: #f0f7ff;
+  color: var(--jl-blue);
+}
+.jl-checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+.jl-checkbox-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14.5px;
+  cursor: pointer;
+  padding: 8px 10px;
+  border: 1px solid var(--jl-line);
+  border-radius: 8px;
+  background: #fff;
+}
+.jl-employer-section {
+  border-top: 1px solid var(--jl-line);
+  padding-top: 16px;
+  margin-top: 12px;
+}
+.jl-section-subheading {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0 0 14px;
+}
+
+/* Step 3 Review & Alerts */
+.jl-summary-box {
+  background: #fbfdff;
+  border: 1px solid var(--jl-line);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.jl-summary-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 15px;
+}
+.jl-alerts-optin-box {
+  border: 1px solid #c9e0ff;
+  border-radius: 12px;
+  background: #f4f8fe;
+  padding: 16px;
+  margin-bottom: 24px;
+}
+.jl-alerts-checkbox-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  cursor: pointer;
+  font-size: 15px;
+}
+.jl-alerts-checkbox-label input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+.jl-alert-options-subgrid {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #dbe8fb;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+.jl-channel-indicator {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.jl-channel-badge {
+  display: inline-block;
+  padding: 6px 10px;
+  background: #e1f5fe;
+  color: #0277bd;
+  font-weight: 650;
+  border-radius: 6px;
+  font-size: 13.5px;
+}
+.jl-onboarding-button-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 24px;
+}
+.jl-onboarding-button-row .btn-primary {
+  flex: 1;
+}
+
+@media (max-width: 640px) {
+  .jl-signup-page, .jl-onboarding-page {
+    padding: 16px 12px 72px;
+  }
+  .jl-signup-card, .jl-onboarding-card {
+    padding: 20px 16px;
+  }
+  .jl-step-label {
+    display: none;
+  }
+  .jl-onboarding-button-row {
+    flex-direction: column;
+  }
+  .jl-onboarding-button-row button {
+    width: 100%;
+  }
+  .jl-country-picker-row {
+    flex-direction: column;
+  }
+}
+

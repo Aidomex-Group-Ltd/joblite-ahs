@@ -159,12 +159,38 @@ app.get('/', optionalAuth, async (c) => {
       .bind(now)
       .first<{ total: number }>()
 
+    let userCountry: string | null = null
+    if (user && !q.country) {
+      const onboarding = await c.env.DB.prepare(
+        'SELECT country_code FROM user_onboarding WHERE user_id = ?'
+      ).bind(user.id).first<{ country_code: string | null }>()
+      userCountry = onboarding?.country_code || null
+      if (!userCountry) {
+        const profile = await c.env.DB.prepare(
+          'SELECT country_code FROM profiles WHERE user_id = ?'
+        ).bind(user.id).first<{ country_code: string | null }>()
+        userCountry = profile?.country_code || null
+      }
+    }
+
+    let orderSql = 'ORDER BY COALESCE(j.published_at, j.discovered_at, j.created_at) DESC, j.id DESC'
+    const orderParams: unknown[] = []
+    if (userCountry) {
+      orderSql = `ORDER BY (CASE
+        WHEN EXISTS (SELECT 1 FROM job_locations jl_pref WHERE jl_pref.job_id = j.id AND jl_pref.country_code = ?) THEN 0
+        WHEN je.mode = 'worldwide' OR EXISTS (SELECT 1 FROM job_eligible_countries ec_pref WHERE ec_pref.job_id = j.id AND ec_pref.country_code = ?) THEN 1
+        WHEN j.workplace_arrangement = 'remote' THEN 2
+        ELSE 3
+      END) ASC, COALESCE(j.published_at, j.discovered_at, j.created_at) DESC, j.id DESC`
+      orderParams.push(userCountry, userCountry)
+    }
+
     const { results } = await c.env.DB.prepare(
       `${JOB_SELECT} WHERE ${whereSql}
-       ORDER BY COALESCE(j.published_at, j.discovered_at, j.created_at) DESC, j.id DESC
+       ${orderSql}
        LIMIT ? OFFSET ?`
     )
-      .bind(...params, limit, offset)
+      .bind(...params, ...orderParams, limit, offset)
       .all()
 
     const jobs = await attachJobDetails(c, results as Row[], user?.id)

@@ -15,8 +15,8 @@ test('guest application, passwordless verification, composer publishing, and med
   page.on('pageerror', (error) => { consoleErrors.push(error.message); console.log(`PAGEERROR ${error.stack || error.message}`) })
   page.on('console', (message) => {
     if (message.type() !== 'error') return
-    // A guest's expected /me 401 is logged by Chromium as a failed resource.
-    if (/server responded with a status of 401/.test(message.text())) return
+    // A guest's expected /me 401 and registration challenge 428 are logged by Chromium as failed resources.
+    if (/server responded with a status of (401|428)/.test(message.text())) return
     consoleErrors.push(message.text())
   })
   page.on('response', (response) => { if (response.url().includes('/api/v1/') && response.status() >= 400) console.log(`API ${response.status()} ${response.url()}`) })
@@ -41,7 +41,7 @@ test('guest application, passwordless verification, composer publishing, and med
   const publicJobHtml = await request.get('/jobs/job_e2e')
   expect(publicJobHtml.status()).toBe(200)
   expect(await publicJobHtml.text()).toContain('E2E Software Engineer · Fixture Employer | Joblite AHIS')
-  await expect(page.getByText('E2E Software Engineer')).toBeVisible()
+  await expect(page.getByText('E2E Software Engineer').first()).toBeVisible({ timeout: 45000 })
   await expect(page.getByPlaceholder('Search jobs, skills or companies')).toHaveValue('E2E')
   await screenshot(page, 'jobs-mobile')
   await page.getByRole('button', { name: /Apply at source/ }).first().click()
@@ -65,11 +65,17 @@ test('guest application, passwordless verification, composer publishing, and med
   const mail = await (await request.get(`/api/v1/auth/test-mail/latest?email=${encodeURIComponent(email)}`)).json()
   await page.getByLabel('Verification code').fill(mail.data.code)
   await page.getByRole('button', { name: 'Verify and continue' }).click()
+  await expect(page.getByRole('heading', { name: 'Set up your Joblite account' })).toBeVisible()
+  await screenshot(page, 'signup-onboarding')
+  await page.getByLabel('Your name').fill('E2E Candidate')
+  await page.getByLabel('Where are you based?').selectOption('UG')
+  await page.getByRole('radio', { name: /I’m looking for work/ }).check()
+  await page.getByLabel('Role or kind of work you’re looking for').fill('Software engineer')
   await expect(page.getByLabel(/I agree to the current/)).toBeVisible()
   await page.getByLabel(/I agree to the current/).check()
   await page.getByLabel(/I confirm that I am at least 18/).check()
   await expect(page.getByLabel(/Email me optional/)).not.toBeChecked()
-  await page.getByRole('button', { name: 'Verify and continue' }).click()
+  await page.getByRole('button', { name: 'Create my account' }).click()
   await expect(page.getByRole('link', { name: /Continue to E2E Fixture Board/ })).toBeVisible({ timeout: 45000 })
   await expect(page.getByText(/opens an external website/)).toBeVisible()
   await screenshot(page, 'apply-continuation')
@@ -106,7 +112,7 @@ test('guest application, passwordless verification, composer publishing, and med
   await context.request.post('/api/v1/auth/logout', { data: {} })
 
   // Every requested route renders the same shared theme on a small and wide viewport.
-  const routes = ['/', '/sign-in', '/settings', '/notifications', '/hiring', '/saved', '/applications', '/jobs', '/legal', '/legal/terms', '/legal/privacy', '/legal/cookies', '/legal/acceptable-use', '/legal/community-guidelines', '/legal/job-disclaimer', '/legal/privacy-rights']
+  const routes = ['/', '/sign-in', '/signup', '/onboarding', '/settings', '/notifications', '/hiring', '/saved', '/applications', '/jobs', '/legal', '/legal/terms', '/legal/privacy', '/legal/cookies', '/legal/acceptable-use', '/legal/community-guidelines', '/legal/job-disclaimer', '/legal/privacy-rights']
   for (const viewport of [{ width: 390, height: 844, name: 'mobile' }, { width: 1440, height: 1000, name: 'desktop' }]) {
     await page.setViewportSize(viewport)
     for (const route of routes) {

@@ -15,9 +15,50 @@ async function unreadNotificationCount(c: any, userId: string): Promise<number> 
   return row?.total ?? 0
 }
 
+function parseJsonArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String).map((s) => s.trim()).filter(Boolean)
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value)
+      if (Array.isArray(parsed)) return parsed.map(String).map((s) => s.trim()).filter(Boolean)
+    } catch {
+      return value.split(',').map((s) => s.trim()).filter(Boolean)
+    }
+  }
+  return []
+}
+
+function formatOnboardingRow(row: any) {
+  const isComplete = row.status === 'completed' || (row.completed_at && row.completed_at > 0 && row.status !== 'skipped')
+  return {
+    status: (row.status || (isComplete ? 'completed' : 'in_progress')) as 'in_progress' | 'completed' | 'skipped',
+    current_step: Math.min(3, Math.max(1, Number(row.current_step || 1))),
+    account_type: row.current_step === 1 && row.status === 'in_progress' && !row.desired_role ? null : row.account_type || null,
+    country_code: row.country_code || null,
+    city: row.city || null,
+    desired_role: row.desired_role || null,
+    skills: parseJsonArray(row.skills_json),
+    work_preference: row.work_preference || null,
+    employment_types: parseJsonArray(row.employment_types_json),
+    experience_level: row.experience_level || null,
+    organization_name: row.organization_name || null,
+    organization_country: row.organization_country || null,
+    organization_city: row.organization_city || null,
+    organization_website: row.organization_website || null,
+    expected_roles: row.expected_roles || null,
+    employer_title: row.employer_title || null,
+    job_alerts_enabled: Boolean(row.job_alerts_enabled),
+    notification_channels: parseJsonArray(row.notification_channels_json).length ? parseJsonArray(row.notification_channels_json) : ['email'],
+    alert_frequency: row.alert_frequency || 'daily',
+    completed_at: row.completed_at && row.completed_at > 0 ? row.completed_at : null,
+    created_at: row.created_at || Math.floor(Date.now() / 1000),
+    updated_at: row.updated_at || Math.floor(Date.now() / 1000),
+  }
+}
+
 app.get('/', async (c) => {
   const user = c.get('user')!
-  const [profile, memberships, unread] = await Promise.all([
+  const [profile, memberships, unread, onboardingRow] = await Promise.all([
     c.env.DB.prepare('SELECT * FROM profiles WHERE user_id = ?').bind(user.id).first<any>(),
     c.env.DB.prepare(
       'SELECT m.organization_id, m.role, o.name as org_name, o.slug as org_slug, o.verification_state FROM memberships m JOIN organizations o ON o.id = m.organization_id WHERE m.user_id = ?'
@@ -25,6 +66,7 @@ app.get('/', async (c) => {
       .bind(user.id)
       .all(),
     unreadNotificationCount(c, user.id),
+    c.env.DB.prepare('SELECT * FROM user_onboarding WHERE user_id = ?').bind(user.id).first<any>(),
   ])
 
   return c.json({
@@ -37,6 +79,7 @@ app.get('/', async (c) => {
       profile: profile || null,
       memberships: memberships.results,
       unread_notifications: unread,
+      onboarding: onboardingRow ? formatOnboardingRow(onboardingRow) : null,
     },
   })
 })
@@ -148,6 +191,217 @@ app.patch('/profile', async (c) => {
   await c.env.DB.prepare(`UPDATE profiles SET ${updates.join(', ')} WHERE user_id = ?`).bind(...values).run()
   profile = await c.env.DB.prepare('SELECT * FROM profiles WHERE user_id = ?').bind(user.id).first()
   return c.json({ data: profile })
+})
+
+app.get('/onboarding', async (c) => {
+  const user = c.get('user')!
+  let row = await c.env.DB.prepare('SELECT * FROM user_onboarding WHERE user_id = ?').bind(user.id).first<any>()
+  if (!row) {
+    const now = Math.floor(Date.now() / 1000)
+    await c.env.DB.prepare(
+      `INSERT INTO user_onboarding (user_id, status, current_step, account_type, completed_at, created_at, updated_at)
+       VALUES (?, 'in_progress', 1, 'candidate', 0, ?, ?)`
+    ).bind(user.id, now, now).run()
+    row = await c.env.DB.prepare('SELECT * FROM user_onboarding WHERE user_id = ?').bind(user.id).first<any>()
+  }
+  return c.json({ data: formatOnboardingRow(row) })
+})
+
+app.put('/onboarding', async (c) => {
+  const user = c.get('user')!
+  const body = await c.req.json().catch(() => ({}))
+  const now = Math.floor(Date.now() / 1000)
+
+  let existing = await c.env.DB.prepare('SELECT * FROM user_onboarding WHERE user_id = ?').bind(user.id).first<any>()
+  if (!existing) {
+    await c.env.DB.prepare(
+      `INSERT INTO user_onboarding (user_id, status, current_step, account_type, completed_at, created_at, updated_at)
+       VALUES (?, 'in_progress', 1, 'candidate', 0, ?, ?)`
+    ).bind(user.id, now, now).run()
+    existing = await c.env.DB.prepare('SELECT * FROM user_onboarding WHERE user_id = ?').bind(user.id).first<any>()
+  }
+
+  const action = typeof body.action === 'string' ? body.action : 'save'
+  const step = clampInt(body.step, 1, 3, Number(existing.current_step) || 1)
+
+  if (action === 'skip') {
+    await c.env.DB.prepare(
+      `UPDATE user_onboarding SET status = 'skipped', completed_at = ?, updated_at = ? WHERE user_id = ?`
+    ).bind(now, now, user.id).run()
+    const updated = await c.env.DB.prepare('SELECT * FROM user_onboarding WHERE user_id = ?').bind(user.id).first<any>()
+    return c.json({ data: formatOnboardingRow(updated) })
+  }
+
+  const updates: string[] = ['updated_at = ?']
+  const values: unknown[] = [now]
+
+  // Step 1: Goal / Account Type
+  if (body.account_type !== undefined) {
+    if (!['candidate', 'employer', 'both'].includes(String(body.account_type))) {
+      return c.json({ error: { code: 'INVALID_ACCOUNT_TYPE', message: 'Choose whether you are looking for work, hiring, or both.' } }, 400)
+    }
+    updates.push('account_type = ?')
+    values.push(body.account_type)
+  }
+
+  // Step 2: Preferences
+  if (body.country_code !== undefined) {
+    const code = typeof body.country_code === 'string' ? body.country_code.toUpperCase().trim() : ''
+    if (code) {
+      const country = await c.env.DB.prepare('SELECT code FROM countries WHERE code = ?').bind(code).first()
+      if (!country) return c.json({ error: { code: 'INVALID_COUNTRY', message: 'Unknown country code' } }, 400)
+      updates.push('country_code = ?')
+      values.push(code)
+      // Mirror country to profile
+      await c.env.DB.prepare('UPDATE profiles SET country_code = ?, updated_at = ? WHERE user_id = ?')
+        .bind(code, now, user.id).run()
+    } else {
+      updates.push('country_code = NULL')
+    }
+  }
+
+  if (body.city !== undefined) {
+    const city = sanitizeText(body.city, 80) || null
+    updates.push('city = ?')
+    values.push(city)
+  }
+
+  if (body.desired_role !== undefined) {
+    const role = sanitizeText(body.desired_role, 120) || null
+    updates.push('desired_role = ?')
+    values.push(role)
+    if (role) {
+      await c.env.DB.prepare('UPDATE profiles SET headline = ?, updated_at = ? WHERE user_id = ?')
+        .bind(role, now, user.id).run()
+    }
+  }
+
+  if (body.work_preference !== undefined) {
+    const pref = ['remote', 'hybrid', 'on-site', 'any'].includes(body.work_preference) ? body.work_preference : null
+    updates.push('work_preference = ?')
+    values.push(pref)
+  }
+
+  if (body.experience_level !== undefined) {
+    const level = ['student', 'entry', 'mid', 'senior', 'executive', 'career_change', 'not_sure'].includes(body.experience_level) ? body.experience_level : null
+    updates.push('experience_level = ?')
+    values.push(level)
+  }
+
+  if (Array.isArray(body.skills)) {
+    const cleanSkills = body.skills
+      .map((s: unknown) => sanitizeText(s, 40).toLowerCase().trim())
+      .filter((s: string) => s.length >= 2)
+      .slice(0, 20)
+    updates.push('skills_json = ?')
+    values.push(JSON.stringify(cleanSkills))
+
+    // Associate skills with profile
+    const profile = await c.env.DB.prepare('SELECT id FROM profiles WHERE user_id = ?').bind(user.id).first<{ id: string }>()
+    if (profile?.id) {
+      for (const skillLabel of cleanSkills) {
+        const skillId = nanoid()
+        await c.env.DB.prepare('INSERT OR IGNORE INTO skills (id, label_normalized) VALUES (?,?)')
+          .bind(skillId, skillLabel).run()
+        const skill = await c.env.DB.prepare('SELECT id FROM skills WHERE label_normalized = ?').bind(skillLabel).first<{ id: string }>()
+        if (skill?.id) {
+          await c.env.DB.prepare('INSERT OR IGNORE INTO profile_skills (profile_id, skill_id) VALUES (?,?)')
+            .bind(profile.id, skill.id).run()
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(body.employment_types)) {
+    const validTypes = ['full-time', 'part-time', 'contract', 'internship', 'temporary']
+    const cleanTypes = body.employment_types.filter((t: unknown) => typeof t === 'string' && validTypes.includes(t))
+    updates.push('employment_types_json = ?')
+    values.push(JSON.stringify(cleanTypes))
+  }
+
+  // Hiring user preferences (no membership or admin privilege is granted per requirements)
+  if (body.organization_name !== undefined) {
+    const orgName = sanitizeText(body.organization_name, 120) || null
+    updates.push('organization_name = ?')
+    values.push(orgName)
+  }
+  if (body.organization_country !== undefined) {
+    const orgCountry = typeof body.organization_country === 'string' ? body.organization_country.toUpperCase().trim() : null
+    updates.push('organization_country = ?')
+    values.push(orgCountry)
+  }
+  if (body.organization_city !== undefined) {
+    const orgCity = sanitizeText(body.organization_city, 80) || null
+    updates.push('organization_city = ?')
+    values.push(orgCity)
+  }
+  if (body.organization_website !== undefined) {
+    const orgWeb = sanitizeText(body.organization_website, 200) || null
+    updates.push('organization_website = ?')
+    values.push(orgWeb)
+  }
+  if (body.expected_roles !== undefined) {
+    const expRoles = sanitizeText(body.expected_roles, 200) || null
+    updates.push('expected_roles = ?')
+    values.push(expRoles)
+  }
+  if (body.employer_title !== undefined) {
+    const empTitle = sanitizeText(body.employer_title, 100) || null
+    updates.push('employer_title = ?')
+    values.push(empTitle)
+  }
+
+  // Step 3: Job alerts
+  if (body.job_alerts_enabled !== undefined) {
+    const alertsEnabled = Boolean(body.job_alerts_enabled)
+    updates.push('job_alerts_enabled = ?')
+    values.push(alertsEnabled ? 1 : 0)
+
+    const frequency = ['daily', 'weekly', 'instant'].includes(body.alert_frequency) ? body.alert_frequency : 'daily'
+    updates.push('alert_frequency = ?')
+    values.push(frequency)
+
+    const channels = Array.isArray(body.notification_channels)
+      ? body.notification_channels.filter((c: unknown) => c === 'email')
+      : ['email']
+    updates.push('notification_channels_json = ?')
+    values.push(JSON.stringify(channels))
+
+    if (alertsEnabled) {
+      const filters = {
+        country: body.country_code || existing.country_code || undefined,
+        q: body.desired_role || existing.desired_role || undefined,
+        arrangement: (body.work_preference || existing.work_preference) !== 'any' ? (body.work_preference || existing.work_preference) : undefined,
+      }
+      await c.env.DB.prepare(
+        `INSERT INTO saved_searches (id, user_id, filters_json, frequency, active, created_at)
+         VALUES (?, ?, ?, ?, 1, ?)`
+      ).bind(nanoid(), user.id, JSON.stringify(filters), frequency, now).run()
+    } else {
+      await c.env.DB.prepare('UPDATE saved_searches SET active = 0 WHERE user_id = ?').bind(user.id).run()
+    }
+  }
+
+  // Handle step progression and completion
+  let nextStep = step
+  if (step === 1 && (body.account_type || existing.account_type)) nextStep = 2
+  else if (step === 2) nextStep = 3
+
+  if (action === 'complete' || (step === 3 && body.job_alerts_enabled !== undefined)) {
+    updates.push("status = 'completed'")
+    updates.push('completed_at = ?')
+    values.push(now)
+    updates.push('current_step = 3')
+  } else {
+    updates.push('current_step = ?')
+    values.push(Math.max(Number(existing.current_step) || 1, nextStep))
+  }
+
+  values.push(user.id)
+  await c.env.DB.prepare(`UPDATE user_onboarding SET ${updates.join(', ')} WHERE user_id = ?`).bind(...values).run()
+
+  const updated = await c.env.DB.prepare('SELECT * FROM user_onboarding WHERE user_id = ?').bind(user.id).first<any>()
+  return c.json({ data: formatOnboardingRow(updated) })
 })
 
 app.get('/applications', async (c) => {

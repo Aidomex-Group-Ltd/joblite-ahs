@@ -16,6 +16,8 @@ import Composer from './pages/Composer'
 import PostMedia from './pages/PostMedia'
 import PostDetail from './pages/PostDetail'
 import ApplicationDetail from './pages/ApplicationDetail'
+import SignUp from './pages/SignUp'
+import Onboarding from './pages/Onboarding'
 import { AuthExperienceProvider, SignInPage } from './components/AuthExperience'
 import { LegalPage, PrivacyChoicesButton, SiteFooter } from './pages/Legal'
 import { applyPageMetadata, DEFAULT_METADATA, SITE_ORIGIN } from '../shared/page-metadata'
@@ -49,6 +51,8 @@ export default function App() {
         <Route path="/posts/:postId/media/:mediaIndex" element={<PostMedia />} />
         <Route path="/posts/:id" element={<PostDetail />} />
         <Route path="/sign-in" element={<SignInPage />} />
+        <Route path="/signup" element={<SignUp />} />
+        <Route path="/onboarding" element={<Onboarding />} />
         <Route path="/jobs" element={<Jobs />} />
         <Route path="/jobs/:id" element={<JobDetail />} />
         <Route path="/companies/:slug" element={<Companies />} />
