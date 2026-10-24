@@ -2,6 +2,21 @@
 
 Last updated: 2026-10-24
 
+## Shared Joblite theme and passwordless account flow (2026-10-24)
+- [x] Reused the homepage's Joblite AHS mark, blue/navy palette, Inter typography, spacing, and card treatment as shared global theme tokens and responsive navigation.
+- [x] Replaced the token-based auth shortcut with six-digit email verification, HMAC-stored challenges, ten-minute expiry, single-use verification, attempt limits, request/resend throttles, session rotation, and honest delivery errors.
+- [x] Added one reusable sign-in component for `/sign-in` and the mobile authentication sheet, with a desktop dialog, focus containment/restoration, safe return-path validation, and an explicit server-resolved “Continue to source” link after authentication.
+- [x] Gated external “Apply at source” actions from Home, jobs search, and job details; external opens remain separate from application tracking.
+- [x] Replaced Saved, Notifications, Settings, and Hiring placeholders with scoped API-backed views/actions. Application navigation appears only for authenticated users with real Joblite application records.
+- [x] Kept the media viewer/feed mounted while authentication is displayed and fixed Worker asset fallback so extensionless SPA routes serve the actual index document with mutable response headers.
+- [x] Added additive migration `0005_passwordless_auth.sql`, an isolated test-only email sink, auth/security unit tests, Playwright E2E setup, and local screenshot capture.
+
+**Verification:** `npm run e2e` passed 1 Playwright journey (guest feed/job filtering, private API denial, application auth sheet/dismissal, new-account email-code verification through the local mail sink, server-resolved external destination, no external click recorded as a submitted application, real local image upload/post publishing, media-viewer Escape/scroll restoration, and all requested page routes at 390px and 1440px). The run captured screenshots under `artifacts/screenshots/` and used a temporary D1 directory; no production mail was sent. Unit verification is tracked separately below.
+
+**Production email configuration:** configured the user-supplied Resend credential as the server-side `EMAIL_API_KEY` compatibility secret because the existing Worker already has a binding named `RESEND_API_KEY`; configured `EMAIL_FROM` as the sender secret. The sender is `noreply@joblite.online`. No test recipient was designated, so real delivery was not smoke-tested. The local E2E mail sink does not prove provider delivery.
+
+**Migration/deploy status:** migration `0005_passwordless_auth.sql` was applied to the isolated E2E database and production D1. Production Worker deployment is performed after final verification.
+
 ## Feed and provider integration verification (2026-10-24)
 - [x] X-style Joblite guest feed with server-side job search, country/remote/source filters, truthful source/date/salary labels, saved jobs, external apply links, and real feed states
 - [x] Route-backed multimedia composer with authenticated R2 upload flow, client/server type and size validation, progress, retry, and retained drafts on publish failure
@@ -14,7 +29,7 @@ Last updated: 2026-10-24
 
 **Empty-feed root cause:** the prior home page only fetched community posts and never requested the existing jobs API. The updated home feed now requests the paginated jobs endpoint and merges real job records with posts; provider sync populates/refreshed its stored catalog.
 
-**Checks:** `npm run typecheck`, `npm run lint`, `npm test` (18 tests), `npm run build`, and Wrangler deploy dry-run passed. Visual browser verification has not been completed in this environment.
+**Checks:** `npm run typecheck`, `npm run lint`, `npm test` (29 tests), `npm run build`, and `npm run e2e` (one Playwright journey) passed. Screenshots were captured for all requested routes at mobile and desktop sizes, plus auth email/code, application continuation, and the media viewer.
 
 ## Phase 0 — Foundation
 - [x] Repository audit and structure created

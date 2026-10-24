@@ -165,6 +165,20 @@ app.get('/applications', async (c) => {
   return c.json({ data: results })
 })
 
+app.get('/external-applications', async (c) => {
+  const user = c.get('user')!
+  const { results } = await c.env.DB.prepare(
+    `SELECT t.job_id, t.self_reported_status as status, t.marked_at, j.title,
+       COALESCE(o.name, j.company_name) as org_name, s.name as source_name
+     FROM external_application_trackers t
+     JOIN jobs j ON j.id = t.job_id
+     LEFT JOIN organizations o ON o.id = j.organization_id
+     LEFT JOIN sources s ON s.id = j.source_id
+     WHERE t.user_id = ? ORDER BY t.marked_at DESC`
+  ).bind(user.id).all()
+  return c.json({ data: results })
+})
+
 app.get('/saved', async (c) => {
   const user = c.get('user')!
   const { results } = await c.env.DB.prepare(

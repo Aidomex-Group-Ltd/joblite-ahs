@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "echo 'lint: basic checks' && tsc --noEmit",
     "test": "vitest run",
+    "e2e": "bash scripts/e2e.sh",
     "test:watch": "vitest",
     "migrate:local": "wrangler d1 migrations apply joblite-db --local --config wrangler.toml",
     "migrate:preview": "wrangler d1 migrations apply joblite-db --remote --env preview --config wrangler.toml",
@@ -26,6 +27,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261024.1",
+    "@playwright/test": "^1.48.2",
     "@types/node": "^22.7.5",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",

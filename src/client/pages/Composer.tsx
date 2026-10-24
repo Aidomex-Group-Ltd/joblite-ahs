@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiDelete, apiPost, errorMessage, uploadMediaWithProgress } from '../lib/api'
-import { signInPath, useSession } from '../lib/session'
+import { useSession } from '../lib/session'
+import { useAuthExperience } from '../components/AuthExperience'
 import './Composer.css'
 
 const DRAFT_KEY = 'joblite:pendingDraft'
@@ -32,6 +33,7 @@ function attachmentLabel(kind: AttachmentKind): string {
 export default function Composer() {
   const navigate = useNavigate()
   const session = useSession()
+  const { openAuth } = useAuthExperience()
   const [draft, setDraft] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [notice, setNotice] = useState('')
@@ -291,7 +293,7 @@ export default function Composer() {
           <button
             type="button"
             className="composer-primary"
-            onClick={() => navigate(signInPath('publish-post', '/compose'))}
+            onClick={() => openAuth({ intent: 'publish-post', nextPath: '/compose' })}
           >
             Sign in and continue
           </button>

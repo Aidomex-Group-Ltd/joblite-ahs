@@ -10,8 +10,9 @@ import {
   safeExternalUrl,
   summarize,
 } from '../lib/format'
-import { signInPath, useSession } from '../lib/session'
+import { useSession } from '../lib/session'
 import { EmptyState, ErrorNotice, Loading, PageIntro } from '../components/Common'
+import { useAuthExperience } from '../components/AuthExperience'
 
 type Job = {
   id: string
@@ -53,6 +54,7 @@ type ListMeta = {
 export default function Jobs() {
   const navigate = useNavigate()
   const session = useSession()
+  const { openAuth } = useAuthExperience()
   const [params, setParams] = useSearchParams()
 
   const q = params.get('q') || ''
@@ -152,7 +154,7 @@ export default function Jobs() {
 
   const toggleSave = async (job: Job) => {
     if (!session.user) {
-      navigate(signInPath('save', `/jobs?${params.toString()}`))
+      openAuth({ intent: 'save', nextPath: `/jobs?${params.toString()}` })
       return
     }
     try {
@@ -167,7 +169,7 @@ export default function Jobs() {
   const apply = (job: Job) => {
     if (job.origin === 'native' && job.application_method === 'native') {
       if (!session.user) {
-        navigate(signInPath('apply', `/jobs/${job.id}`))
+        openAuth({ intent: 'apply', nextPath: `/jobs/${job.id}` })
         return
       }
       navigate(`/jobs/${job.id}`)
@@ -178,7 +180,9 @@ export default function Jobs() {
       navigate(`/jobs/${job.id}`)
       return
     }
-    window.open(url, '_blank', 'noopener,noreferrer')
+    if (!url) return
+    if (!session.user) openAuth({ intent: 'apply-source', jobId: job.id, nextPath: `/jobs?${params.toString()}` })
+    else window.open(url, '_blank', 'noopener,noreferrer')
   }
 
   const share = async (job: Job) => {
@@ -197,7 +201,7 @@ export default function Jobs() {
 
   const toggleEligibility = () => {
     if (!session.user) {
-      navigate(signInPath('personalised-eligibility', `/jobs?${params.toString()}`))
+      openAuth({ intent: 'personalised-eligibility', nextPath: `/jobs?${params.toString()}` })
       return
     }
     if (!session.profile?.country_code) {

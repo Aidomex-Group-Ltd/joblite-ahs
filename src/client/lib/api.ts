@@ -2,13 +2,15 @@ export class ApiError extends Error {
   readonly status: number
   readonly code: string
   readonly fields?: Record<string, string>
+  readonly retryAfter?: number
 
-  constructor(status: number, code: string, message: string, fields?: Record<string, string>) {
+  constructor(status: number, code: string, message: string, fields?: Record<string, string>, retryAfter?: number) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.code = code
     this.fields = fields
+    this.retryAfter = retryAfter
   }
 }
 
@@ -22,7 +24,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<ApiEnve
       ...init,
       headers: {
         Accept: 'application/json',
-        ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
+        ...(['POST', 'PUT', 'PATCH'].includes((init.method || 'GET').toUpperCase()) && !(init.body instanceof FormData)
+          ? { 'Content-Type': 'application/json' }
+          : {}),
         ...init.headers,
       },
     })
@@ -45,7 +49,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<ApiEnve
       response.status,
       typeof error?.code === 'string' ? error.code : 'REQUEST_FAILED',
       typeof error?.message === 'string' ? error.message : `Request failed with status ${response.status}`,
-      error?.fields
+      error?.fields,
+      typeof error?.retry_after === 'number' ? error.retry_after : undefined
     )
   }
 

@@ -1,10 +1,19 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
+import { apiGet, apiPatch, errorMessage } from '../lib/api'
+import { useSession } from '../lib/session'
+import { useAuthExperience } from '../components/AuthExperience'
+import { ErrorNotice, Loading, PageIntro } from '../components/Common'
 
+type Country = { code: string; name: string }
 export default function Settings() {
-  return (
-    <div className="card">
-      <h2 style={{marginBottom: '12px'}}>Settings</h2>
-      <p style={{color: 'var(--text-secondary)'}}>This section is available. Connect to APIs for full functionality.</p>
-    </div>
-  )
+  const session = useSession(); const { openAuth } = useAuthExperience()
+  const [countries, setCountries] = useState<Country[]>([]); const [name, setName] = useState(''); const [headline, setHeadline] = useState(''); const [bio, setBio] = useState(''); const [country, setCountry] = useState(''); const [visibility, setVisibility] = useState('public')
+  const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false); const [error, setError] = useState(''); const [notice, setNotice] = useState('')
+  useEffect(() => { apiGet<Country[]>('/countries').then((r) => setCountries(r.data || [])).catch(() => setCountries([])) }, [])
+  useEffect(() => { if (session.user) { setName(session.user.display_name || ''); setHeadline(session.profile?.headline || ''); setBio(session.profile?.bio || ''); setCountry(session.profile?.country_code || ''); setVisibility(session.profile?.visibility || 'public'); setLoading(false) } else if (!session.loading) setLoading(false) }, [session.user, session.profile, session.loading])
+  async function save(event: React.FormEvent) { event.preventDefault(); setSaving(true); setError(''); setNotice(''); try { await apiPatch('/me/profile', { display_name: name, headline, bio, country_code: country || null, visibility }); await session.refresh(); setNotice('Your profile settings were saved.') } catch (cause) { setError(errorMessage(cause)) } finally { setSaving(false) } }
+  async function signOut() { try { await session.signOut(); setNotice('You are signed out.') } catch (cause) { setError(errorMessage(cause)) } }
+  return <div className="page"><PageIntro title="Settings" subtitle="Manage your account and profile information." />
+    {!session.user && !session.loading ? <section className="card state-card"><h2>Your account settings</h2><p>Sign in to manage the profile information attached to your Joblite account.</p><button className="btn state-action" onClick={() => openAuth({ intent: 'profile' })}>Continue with email</button></section> : loading ? <Loading label="Loading your settings…" /> : error && !session.user ? <ErrorNotice message={error} /> : <><form className="card form-grid" onSubmit={(event) => void save(event)}><h2>Profile</h2><p className="muted">Signed in as {session.user?.email}</p><label>Display name<input className="input" value={name} onChange={(event) => setName(event.target.value)} maxLength={80} /></label><label>Headline<input className="input" value={headline} onChange={(event) => setHeadline(event.target.value)} maxLength={120} /></label><label>About<textarea className="input" value={bio} onChange={(event) => setBio(event.target.value)} maxLength={2000} rows={4} /></label><label>Country<select className="input" value={country} onChange={(event) => setCountry(event.target.value)}><option value="">Select a country</option>{countries.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label><label>Profile visibility<select className="input" value={visibility} onChange={(event) => setVisibility(event.target.value)}><option value="public">Public</option><option value="recruiter_only">Recruiters only</option><option value="private">Private</option></select></label>{error && <p className="form-error" role="alert">{error}</p>}{notice && <p className="form-notice" role="status">{notice}</p>}<div className="button-row"><button className="btn" disabled={saving}>{saving ? 'Saving…' : 'Save profile'}</button><button type="button" className="btn btn-secondary" onClick={() => void signOut()}>Sign out</button></div></form><div className="card"><h2>Preferences</h2><p className="muted">Notification and privacy preference controls are not available yet.</p></div></>}
+  </div>
 }

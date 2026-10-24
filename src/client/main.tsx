@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import './styles/index.css'
+import './styles/joblite-theme.css'
 import { SessionProvider } from './lib/session'
 
 class RootErrorBoundary extends React.Component<

@@ -22,6 +22,7 @@ import {
 } from '../lib/format'
 import { signInPath, useSession } from '../lib/session'
 import MediaViewer, { type ViewerPost } from '../components/MediaViewer'
+import { useAuthExperience } from '../components/AuthExperience'
 
 const DRAFT_KEY = 'joblite:pendingDraft'
 
@@ -136,6 +137,7 @@ function mergeEntries(jobs: FeedItem[], posts: FeedItem[]): FeedItem[] {
 export default function Home() {
   const navigate = useNavigate()
   const session = useSession()
+  const { openAuth } = useAuthExperience()
 
   const [countries, setCountries] = useState<{ code: string; name: string }[]>([])
   const [boards, setBoards] = useState<Board[]>([])
@@ -350,9 +352,9 @@ export default function Home() {
           // ignore storage restrictions
         }
       }
-      navigate(signInPath(intent, nextPath || '/'))
+      openAuth({ intent, nextPath: intent === 'publish-post' ? '/compose' : nextPath || (window.location.pathname + window.location.search) })
     },
-    [navigate, pendingDraft]
+    [navigate, openAuth, pendingDraft]
   )
 
   const handleApply = useCallback(
@@ -367,9 +369,13 @@ export default function Home() {
         navigate(`/jobs/${encodeURIComponent(job.id)}`)
         return
       }
+      if (!session.user) {
+        openAuth({ intent: 'apply-source', jobId: job.id, nextPath: window.location.pathname + window.location.search })
+        return
+      }
       window.open(applyUrl, '_blank', 'noopener,noreferrer')
     },
-    [navigate]
+    [navigate, openAuth, session.user]
   )
 
   const restoreFeedPosition = useCallback(() => {
@@ -761,7 +767,8 @@ export default function Home() {
                       type="button"
                       onClick={() => {
                         const url = safeExternalUrl(menuItem.applyUrl)
-                        if (url) window.open(url, '_blank', 'noopener,noreferrer')
+                        if (url && !session.user) openAuth({ intent: 'apply-source', jobId: menuItem.id, nextPath: window.location.pathname + window.location.search })
+                        else if (url) window.open(url, '_blank', 'noopener,noreferrer')
                         setMenuItem(null)
                       }}
                     >

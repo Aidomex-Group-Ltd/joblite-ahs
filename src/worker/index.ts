@@ -71,10 +71,21 @@ async function serveAppShell(c: any) {
 
   const assets = (c.env as Env).ASSETS
   if (assets) {
-    const assetResponse = await assets.fetch(c.req.raw)
-    if (assetResponse.status !== 404) return assetResponse
-    const shell = await assets.fetch(new Request(new URL('/index.html', c.req.url).toString(), c.req.raw))
-    if (shell.status !== 404) return shell
+    const pathname = new URL(c.req.url).pathname
+    const isFileRequest = pathname.startsWith('/assets/') || /\.[a-z\d]{2,8}$/i.test(pathname)
+    if (isFileRequest) {
+      const assetResponse = await assets.fetch(c.req.raw)
+      if (assetResponse.status === 404) return assetResponse
+      return new Response(assetResponse.body, {
+        status: assetResponse.status,
+        statusText: assetResponse.statusText,
+        headers: new Headers(assetResponse.headers),
+      })
+    }
+    // The asset binding serves the SPA shell at `/`; requesting `/index.html`
+    // can produce an empty stream on some Workers asset deployments.
+    const shell = await assets.fetch(new Request(new URL('/', c.req.url).toString()))
+    if (shell.status !== 404) return c.html(await shell.text())
   }
 
   try {

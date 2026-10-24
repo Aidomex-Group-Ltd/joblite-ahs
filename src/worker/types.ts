@@ -13,6 +13,10 @@ export type Env = {
   STREAM_ACCOUNT_ID?: string
   STREAM_API_TOKEN?: string
   EMAIL_API_KEY?: string
+  RESEND_API_KEY?: string
+  EMAIL_FROM?: string
+  AUTH_RESEND_COOLDOWN_SECONDS?: string
+  TEST_MAIL_SINK?: string
 }
 
 export type Variables = {

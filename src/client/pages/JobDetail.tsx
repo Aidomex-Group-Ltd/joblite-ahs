@@ -10,8 +10,9 @@ import {
   publicJobUrl,
   safeExternalUrl,
 } from '../lib/format'
-import { signInPath, useSession } from '../lib/session'
+import { useSession } from '../lib/session'
 import { ErrorNotice, Loading } from '../components/Common'
+import { useAuthExperience } from '../components/AuthExperience'
 
 type Job = {
   id: string
@@ -53,6 +54,7 @@ export default function JobDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const session = useSession()
+  const { openAuth } = useAuthExperience()
   const [job, setJob] = useState<Job | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -86,7 +88,7 @@ export default function JobDetail() {
   async function toggleSave() {
     if (!job) return
     if (!session.user) {
-      navigate(signInPath('save', `/jobs/${job.id}`))
+      openAuth({ intent: 'save', nextPath: `/jobs/${job.id}` })
       return
     }
     try {
@@ -121,12 +123,16 @@ export default function JobDetail() {
         setNotice('This imported job does not have a verified application destination yet.')
         return
       }
-      setNotice(`Opening ${job.source_name || 'the original source'} in a new tab. Joblite does not record this as an application.`)
+      if (!session.user) {
+        openAuth({ intent: 'apply-source', jobId: job.id, nextPath: `/jobs/${encodeURIComponent(job.id)}` })
+        return
+      }
       window.open(url, '_blank', 'noopener,noreferrer')
+      setNotice(`Opened ${job.source_name || 'the original source'}. Joblite does not record this as an application.`)
       return
     }
     if (!session.user) {
-      navigate(signInPath('apply', `/jobs/${job.id}`))
+      openAuth({ intent: 'apply', nextPath: `/jobs/${job.id}` })
       return
     }
     setConfirming(true)
@@ -152,7 +158,7 @@ export default function JobDetail() {
   async function markExternalApplied() {
     if (!job) return
     if (!session.user) {
-      navigate(signInPath('apply', `/jobs/${job.id}`))
+      openAuth({ intent: 'apply', nextPath: `/jobs/${job.id}` })
       return
     }
     try {

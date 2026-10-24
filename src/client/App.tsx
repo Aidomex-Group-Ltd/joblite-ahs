@@ -15,18 +15,19 @@ import Boards from './pages/Boards'
 import Composer from './pages/Composer'
 import PostMedia from './pages/PostMedia'
 import PostDetail from './pages/PostDetail'
-import SignIn from './pages/SignIn'
 import ApplicationDetail from './pages/ApplicationDetail'
+import { AuthExperienceProvider, SignInPage } from './components/AuthExperience'
 
 export default function App() {
   return (
     <Layout>
+      <AuthExperienceProvider>
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/compose" element={<Composer />} />
         <Route path="/posts/:postId/media/:mediaIndex" element={<PostMedia />} />
         <Route path="/posts/:id" element={<PostDetail />} />
-        <Route path="/sign-in" element={<SignIn />} />
+        <Route path="/sign-in" element={<SignInPage />} />
         <Route path="/jobs" element={<Jobs />} />
         <Route path="/jobs/:id" element={<JobDetail />} />
         <Route path="/companies/:slug" element={<Companies />} />
@@ -42,6 +43,7 @@ export default function App() {
         <Route path="/profile" element={<Settings />} />
         <Route path="/boards" element={<Boards />} />
       </Routes>
+      </AuthExperienceProvider>
     </Layout>
   )
 }

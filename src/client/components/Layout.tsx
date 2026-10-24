@@ -1,117 +1,44 @@
 import React, { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import './Layout.css'
+import { JobliteBrand } from './JobliteBrand'
+import { useSession } from '../lib/session'
+import { apiGet } from '../lib/api'
 
-const navItems = [
-  { path: '/', label: 'Home', icon: '🏠' },
-  { path: '/jobs', label: 'Jobs', icon: '💼' },
-  { path: '/applications', label: 'Applications', icon: '📋' },
-  { path: '/saved', label: 'Saved', icon: '🔖' },
-  { path: '/settings', label: 'Profile', icon: '👤' },
+const links = [
+  ['/', 'Home', '⌂'], ['/jobs', 'Jobs', '⌕'], ['/saved', 'Saved', '♡'],
+  ['/applications', 'Applications', '▤'], ['/hiring', 'Hiring', '＋'],
 ]
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation()
-  const [user, setUser] = useState<any>(null)
-  const bare = location.pathname === '/' || location.pathname === '/compose' || /^\/posts\/[^/]+\/media\/\d+$/.test(location.pathname)
-
+  const { user, loading, unreadNotifications } = useSession()
+  const [hasApplications, setHasApplications] = useState(false)
   useEffect(() => {
-    if (bare) return
-    fetch('/api/v1/me')
-      .then(r => r.ok ? r.json() as Promise<any> : null)
-      .then(data => {
-        if (data?.data?.user) setUser(data.data.user)
-      })
-      .catch(() => {})
-  }, [bare])
-
-  // The approved feed and the immersive composer/viewer own the full viewport.
+    let active = true
+    if (!user) { setHasApplications(false); return () => { active = false } }
+    apiGet<{ applications: { total: number }; external_tracked: number }>('/me/summary').then(({ data }) => { if (active) setHasApplications(data.applications.total > 0 || data.external_tracked > 0) }).catch(() => { if (active) setHasApplications(false) })
+    return () => { active = false }
+  }, [user])
+  const bare = location.pathname === '/' || location.pathname === '/compose' || /^\/posts\/[^/]+\/media\/\d+$/.test(location.pathname)
   if (bare) return <>{children}</>
-
-  return (
-    <div className="layout">
-      <header className="header">
-        <div className="container header-content">
-          <Link to="/" className="logo">Joblite AHS</Link>
-          <nav className="top-nav desktop-only">
-            <Link to="/jobs">Jobs</Link>
-            <Link to="/boards">Boards</Link>
-            <Link to="/hiring">Hiring</Link>
-          </nav>
-          <div className="header-actions">
-            <button className="icon-btn" aria-label="Notifications">🔔</button>
-            <div className="avatar" aria-label="User avatar">{user ? user.email[0].toUpperCase() : 'U'}</div>
-          </div>
-        </div>
-      </header>
-      
-      <div className="main-container container">
-        <aside className="sidebar-left desktop-only">
-          <nav className="side-nav">
-            <Link to="/" className={`side-nav-item ${location.pathname === '/' ? 'active' : ''}`}>
-              <span>🏠</span> Home
-            </Link>
-            <Link to="/jobs" className={`side-nav-item ${location.pathname.startsWith('/jobs') ? 'active' : ''}`}>
-              <span>💼</span> Jobs
-            </Link>
-            <Link to="/boards" className={`side-nav-item ${location.pathname === '/boards' ? 'active' : ''}`}>
-              <span>🌐</span> Boards
-            </Link>
-            <Link to="/applications" className={`side-nav-item ${location.pathname.startsWith('/applications') ? 'active' : ''}`}>
-              <span>📋</span> My Applications
-            </Link>
-            <Link to="/saved" className={`side-nav-item ${location.pathname === '/saved' ? 'active' : ''}`}>
-              <span>🔖</span> Saved
-            </Link>
-            <Link to="/hiring" className={`side-nav-item ${location.pathname.startsWith('/hiring') ? 'active' : ''}`}>
-              <span>👥</span> Hiring
-            </Link>
-            <Link to="/notifications" className={`side-nav-item ${location.pathname === '/notifications' ? 'active' : ''}`}>
-              <span>🔔</span> Notifications
-            </Link>
-            <Link to="/settings" className={`side-nav-item ${location.pathname === '/settings' ? 'active' : ''}`}>
-              <span>⚙️</span> Settings
-            </Link>
-          </nav>
-        </aside>
-        
-        <main className="main-content">
-          {children}
-        </main>
-        
-        <aside className="sidebar-right desktop-only">
-          <div className="card">
-            <h3 style={{fontSize: '18px', marginBottom: '8px', color: 'var(--navy)'}}>Discover</h3>
-            <p style={{color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '12px'}}>
-              Find jobs across all countries and industries
-            </p>
-            <Link to="/jobs" className="btn" style={{display: 'inline-flex', textDecoration: 'none'}}>
-              Browse Jobs
-            </Link>
-          </div>
-          <div className="card">
-            <h4 style={{fontSize: '16px', marginBottom: '8px', color: 'var(--navy)'}}>Job Boards</h4>
-            <p style={{color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '8px'}}>Explore external job boards</p>
-            <Link to="/boards" style={{fontSize: '14px'}}>View Directory →</Link>
-          </div>
-          {!user && (
-            <div className="card">
-              <h4 style={{fontSize: '16px', marginBottom: '8px', color: 'var(--navy)'}}>Join Joblite</h4>
-              <p style={{color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '8px'}}>Sign in to apply, save jobs, and more</p>
-              <button className="btn btn-secondary" style={{width: '100%'}} onClick={() => alert('Sign in required - use auth API')}>Sign in</button>
-            </div>
-          )}
-        </aside>
-      </div>
-      
-      <nav className="bottom-nav mobile-only">
-        {navItems.map(item => (
-          <Link key={item.path} to={item.path} className={`bottom-nav-item ${location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(item.path)) ? 'active' : ''}`}>
-            <span style={{fontSize: '22px'}}>{item.icon}</span>
-            <span style={{fontSize: '11px'}}>{item.label}</span>
-          </Link>
-        ))}
+  return <div className="jl-site-layout">
+    <header className="jl-site-header">
+      <JobliteBrand />
+      <nav className="jl-top-links" aria-label="Account navigation">
+        <Link to="/notifications" aria-label="Notifications">Notifications{unreadNotifications > 0 ? ` (${unreadNotifications})` : ''}</Link>
+        <Link to={user ? '/settings' : '/sign-in'}>{user ? 'Account' : 'Sign in'}</Link>
       </nav>
+    </header>
+    <div className="jl-site-content">
+      <nav className="jl-site-sidebar" aria-label="Main navigation">
+        {links.filter(([path]) => path !== '/applications' || (user && !loading && hasApplications)).map(([path, title, icon]) => <Link key={path} to={path} aria-current={location.pathname === path ? 'page' : undefined}><span aria-hidden="true">{icon}</span>{title}</Link>)}
+      </nav>
+      <main className="jl-site-main">{children}</main>
+      <aside className="jl-site-aside"><div className="card"><strong>Joblite AHS</strong><p className="muted">Discover opportunities and share what you’re building.</p><Link to="/jobs" className="btn btn-secondary">Explore jobs</Link></div></aside>
     </div>
-  )
+    <nav className="jl-mobile-nav" aria-label="Main navigation">
+      {links.filter(([path]) => path !== '/applications' || (user && !loading && hasApplications)).map(([path, title, icon]) => <Link key={path} to={path} aria-current={location.pathname === path ? 'page' : undefined}><span aria-hidden="true">{icon}</span><small>{title}</small></Link>)}
+      <Link to="/notifications" aria-current={location.pathname === '/notifications' ? 'page' : undefined}><span aria-hidden="true">♧</span><small>Alerts</small></Link>
+    </nav>
+  </div>
 }
