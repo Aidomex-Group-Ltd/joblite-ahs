@@ -94,6 +94,7 @@ body.jl-viewer-open {
   font-size: 17px;
   font-weight: 900;
 }
+.mv-brand-image { display: block; width: 32px; height: 32px; flex: 0 0 32px; object-fit: contain; border-radius: 8px; }
 
 .mv-menu-wrap {
   position: relative;

@@ -13,6 +13,7 @@ import {
 import { useSession } from '../lib/session'
 import { ErrorNotice, Loading } from '../components/Common'
 import { useAuthExperience } from '../components/AuthExperience'
+import { applyPageMetadata, DEFAULT_METADATA, SITE_ORIGIN } from '../../shared/page-metadata'
 
 type Job = {
   id: string
@@ -82,6 +83,14 @@ export default function JobDetail() {
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(() => {
+    const url = `${SITE_ORIGIN}/jobs/${encodeURIComponent(id || '')}`
+    if (!job) { applyPageMetadata({ ...DEFAULT_METADATA, title: 'Job unavailable | Joblite AHIS', url, noindex: true }); return }
+    const company = job.org_name || job.company_name || 'Employer'
+    const details = [job.location_text, job.workplace_arrangement === 'remote' ? 'Remote' : '', job.salary_text].filter(Boolean)
+    applyPageMetadata({ ...DEFAULT_METADATA, title: `${job.title} · ${company} | Joblite AHIS`, description: [job.title, company, ...details].join(' · ').slice(0, 300), url, noindex: false })
+  }, [id, job])
 
   const native = job ? job.origin === 'native' && job.application_method === 'native' : false
 

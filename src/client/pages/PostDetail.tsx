@@ -4,6 +4,7 @@ import { apiDelete, apiGet, apiPost, errorMessage } from '../lib/api'
 import { formatRelativeTime, publicPostUrl } from '../lib/format'
 import { signInPath, useSession } from '../lib/session'
 import { EmptyState, Loading } from '../components/Common'
+import { applyPageMetadata, DEFAULT_METADATA, SITE_ORIGIN } from '../../shared/page-metadata'
 
 type Post = {
   id: string
@@ -61,6 +62,14 @@ export default function PostDetail() {
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(() => {
+    const url = `${SITE_ORIGIN}/posts/${encodeURIComponent(id || '')}`
+    if (!post) { applyPageMetadata({ ...DEFAULT_METADATA, title: 'Post unavailable | Joblite AHIS', url, noindex: true }); return }
+    const excerpt = post.body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 260)
+    const image = post.media.find((media) => media.kind === 'image')
+    applyPageMetadata({ ...DEFAULT_METADATA, title: `${excerpt.slice(0, 90) || 'Public post'} | Joblite AHIS`, description: excerpt || 'A public post from the Joblite community.', url, type: 'article', image: image ? new URL(image.url, SITE_ORIGIN).href : DEFAULT_METADATA.image, imageWidth: image ? undefined : 1200, imageHeight: image ? undefined : 630, imageAlt: image ? `Image shared in a public Joblite post: ${excerpt.slice(0, 120)}` : DEFAULT_METADATA.imageAlt })
+  }, [id, post])
 
   const requireSignIn = useCallback(
     (intent: string) => {

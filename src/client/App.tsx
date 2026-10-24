@@ -1,5 +1,5 @@
-import React from 'react'
-import { Routes, Route } from 'react-router-dom'
+import React, { useEffect } from 'react'
+import { Routes, Route, useLocation } from 'react-router-dom'
 import Layout from './components/Layout'
 import Home from './pages/Home'
 import Jobs from './pages/Jobs'
@@ -17,11 +17,32 @@ import PostMedia from './pages/PostMedia'
 import PostDetail from './pages/PostDetail'
 import ApplicationDetail from './pages/ApplicationDetail'
 import { AuthExperienceProvider, SignInPage } from './components/AuthExperience'
+import { LegalPage, PrivacyChoicesButton, SiteFooter } from './pages/Legal'
+import { applyPageMetadata, DEFAULT_METADATA, SITE_ORIGIN } from '../shared/page-metadata'
+
+function RouteMetadata() {
+  const location = useLocation()
+  useEffect(() => {
+    const path = location.pathname
+    if (/^\/jobs\/[A-Za-z0-9_-]+$/.test(path) || /^\/posts\/[A-Za-z0-9_-]+$/.test(path)) return
+    const isLegal = path === '/legal' || path.startsWith('/legal/')
+    const title = isLegal ? `${path === '/legal' ? 'Legal Center' : path.split('/').pop()?.replace(/-/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())} | Joblite AHIS` : DEFAULT_METADATA.title
+    applyPageMetadata({ ...DEFAULT_METADATA, title, url: `${SITE_ORIGIN}${path}`, noindex: !isLegal && !['/','/jobs','/boards'].includes(path) })
+  }, [location.pathname])
+  return null
+}
+
+function GlobalPageTools() {
+  const location = useLocation()
+  if (/^\/posts\/[^/]+\/media\/\d+$/.test(location.pathname)) return null
+  return <><SiteFooter /><PrivacyChoicesButton /></>
+}
 
 export default function App() {
   return (
-    <Layout>
-      <AuthExperienceProvider>
+    <AuthExperienceProvider>
+      <RouteMetadata />
+      <Layout>
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/compose" element={<Composer />} />
@@ -42,8 +63,18 @@ export default function App() {
         <Route path="/settings" element={<Settings />} />
         <Route path="/profile" element={<Settings />} />
         <Route path="/boards" element={<Boards />} />
+        <Route path="/legal" element={<LegalPage />} />
+        <Route path="/legal/terms" element={<LegalPage />} />
+        <Route path="/legal/privacy" element={<LegalPage />} />
+        <Route path="/legal/cookies" element={<LegalPage />} />
+        <Route path="/legal/acceptable-use" element={<LegalPage />} />
+        <Route path="/legal/community-guidelines" element={<LegalPage />} />
+        <Route path="/legal/job-disclaimer" element={<LegalPage />} />
+        <Route path="/legal/privacy-rights" element={<LegalPage />} />
+        <Route path="/legal/employer-terms" element={<LegalPage />} />
       </Routes>
-      </AuthExperienceProvider>
-    </Layout>
+      </Layout>
+      <GlobalPageTools />
+    </AuthExperienceProvider>
   )
 }

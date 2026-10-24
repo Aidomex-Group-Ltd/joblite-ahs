@@ -265,11 +265,9 @@ export default function JobliteHome(props: JobliteHomeProps) {
     <div className="jl-app">
       <div className="jl-shell">
         <header className="jl-header">
-          <button type="button" className="jl-brand" aria-label="Joblite AHS home" onClick={() => props.onNavigate('/')}>
-            <span className="jl-brand-mark">
-              J<span />
-            </span>
-            Joblite AHS
+          <button type="button" className="jl-brand" aria-label="Joblite AHIS home" onClick={() => props.onNavigate('/')}>
+            <img className="jl-brand-logo" src="/joblite.png" alt="" />
+            Joblite AHIS
           </button>
           <div className="jl-header-actions">
             <button

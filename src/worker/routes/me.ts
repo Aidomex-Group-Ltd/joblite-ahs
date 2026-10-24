@@ -179,6 +179,63 @@ app.get('/external-applications', async (c) => {
   return c.json({ data: results })
 })
 
+app.get('/privacy-requests', async (c) => {
+  const user = c.get('user')!
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, request_type, details, status, region, language, created_at, updated_at, resolution_note FROM privacy_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT 100'
+  ).bind(user.id).all()
+  c.header('Cache-Control', 'private, no-store')
+  return c.json({ data: results })
+})
+
+app.post('/privacy-requests', async (c) => {
+  const user = c.get('user')!
+  const body = await c.req.json().catch(() => ({}))
+  const requestType = body.request_type
+  if (!['access','correction','deletion','export','objection','withdraw_consent'].includes(requestType)) {
+    return c.json({ error: { code: 'INVALID_REQUEST', message: 'Choose a supported privacy request.' } }, 400)
+  }
+  const details = typeof body.details === 'string' ? sanitizeText(body.details, 1000) || null : null
+  const region = typeof body.region === 'string' && ['UG','EEA','UK','other','unknown'].includes(body.region) ? body.region : 'unknown'
+  const language = typeof body.language === 'string' && /^[a-z]{2}(-[A-Z]{2})?$/.test(body.language) ? body.language : 'en'
+  const id = nanoid()
+  const now = Math.floor(Date.now() / 1000)
+  await c.env.DB.prepare(
+    'INSERT INTO privacy_requests (id, user_id, request_type, details, status, region, language, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)'
+  ).bind(id, user.id, requestType, details, 'received', region, language, now, now).run()
+  c.header('Cache-Control', 'private, no-store')
+  return c.json({ data: { id, request_type: requestType, details, status: 'received', region, language, created_at: now, updated_at: now, resolution_note: null } }, 201)
+})
+
+app.get('/export', async (c) => {
+  const user = c.get('user')!
+  const [profile, posts, comments, applications, savedJobs, legalRecords, privacyRequests] = await Promise.all([
+    c.env.DB.prepare('SELECT handle, headline, bio, country_code, visibility, availability, created_at, updated_at FROM profiles WHERE user_id = ?').bind(user.id).first(),
+    c.env.DB.prepare("SELECT id, job_id, body, visibility, state, created_at, updated_at FROM posts WHERE author_id = ? AND state != 'deleted' ORDER BY created_at").bind(user.id).all(),
+    c.env.DB.prepare('SELECT id, post_id, body, state, created_at FROM comments WHERE author_id = ? ORDER BY created_at').bind(user.id).all(),
+    c.env.DB.prepare('SELECT id, job_id, stage, version, submitted_at, updated_at FROM applications WHERE candidate_id = ? ORDER BY submitted_at').bind(user.id).all(),
+    c.env.DB.prepare('SELECT job_id, created_at FROM saved_jobs WHERE user_id = ? ORDER BY created_at').bind(user.id).all(),
+    c.env.DB.prepare('SELECT document_id, document_version, action, purpose, region, language, created_at FROM legal_records WHERE user_id = ? ORDER BY created_at').bind(user.id).all(),
+    c.env.DB.prepare('SELECT id, request_type, status, created_at, updated_at FROM privacy_requests WHERE user_id = ? ORDER BY created_at').bind(user.id).all(),
+  ])
+  c.header('Cache-Control', 'private, no-store')
+  c.header('Content-Disposition', 'attachment; filename="joblite-account-export.json"')
+  return c.json({ data: { exported_at: new Date().toISOString(), account: { email: user.email, display_name: user.display_name }, profile: profile || null, posts: posts.results, comments: comments.results, applications: applications.results, saved_jobs: savedJobs.results, legal_records: legalRecords.results, privacy_requests: privacyRequests.results } })
+})
+
+app.post('/privacy-consent/withdraw', async (c) => {
+  const user = c.get('user')!
+  const body = await c.req.json().catch(() => ({}))
+  const purpose = typeof body.purpose === 'string' && ['optional_analytics','optional_marketing','optional_tracking'].includes(body.purpose) ? body.purpose : 'optional_tracking'
+  const now = Math.floor(Date.now() / 1000)
+  await c.env.DB.prepare(
+    `INSERT INTO legal_records (id, user_id, document_id, document_version, action, purpose, region, language, created_at)
+     VALUES (?,?,'privacy-choices','v1-2026-10-24','withdrawal',?,?,?,?)`
+  ).bind(nanoid(), user.id, purpose, typeof body.region === 'string' ? body.region : 'unknown', typeof body.language === 'string' ? body.language : 'en', now).run()
+  c.header('Cache-Control', 'private, no-store')
+  return c.json({ data: { withdrawn: true, purpose, created_at: now } })
+})
+
 app.get('/saved', async (c) => {
   const user = c.get('user')!
   const { results } = await c.env.DB.prepare(

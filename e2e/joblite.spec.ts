@@ -10,7 +10,7 @@ async function screenshot(page: Page, name: string) {
 }
 
 test('guest application, passwordless verification, composer publishing, and media viewer journeys', async ({ page, context, request }) => {
-  test.setTimeout(120000)
+  test.setTimeout(300000)
   const consoleErrors: string[] = []
   page.on('pageerror', (error) => { consoleErrors.push(error.message); console.log(`PAGEERROR ${error.stack || error.message}`) })
   page.on('console', (message) => {
@@ -23,7 +23,7 @@ test('guest application, passwordless verification, composer publishing, and med
   await context.route('https://jobs.example.test/**', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>External fixture</title>' }))
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')
-  await expect(page.getByRole('button', { name: 'Joblite AHS home' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Joblite AHIS home' })).toBeVisible()
   await expect(page.getByRole('button', { name: /Create a post or job/ })).toBeVisible()
   await screenshot(page, 'home-mobile-guest')
 
@@ -34,6 +34,13 @@ test('guest application, passwordless verification, composer publishing, and med
   expect(await deepRoute.text()).toContain('<div id="root"></div>')
   const deepResponse = await page.goto('/jobs?q=E2E', { waitUntil: 'commit' })
   expect(deepResponse?.status()).toBe(200)
+  await page.waitForLoadState('networkidle')
+  const deepHtml = await request.get('/jobs?q=E2E')
+  expect((await deepHtml.text()).match(/property="og:title"/g)?.length).toBe(1)
+  expect((await deepHtml.text())).toContain('Joblite AHIS | Local Jobs &amp; Remote Opportunities')
+  const publicJobHtml = await request.get('/jobs/job_e2e')
+  expect(publicJobHtml.status()).toBe(200)
+  expect(await publicJobHtml.text()).toContain('E2E Software Engineer · Fixture Employer | Joblite AHIS')
   await expect(page.getByText('E2E Software Engineer')).toBeVisible()
   await expect(page.getByPlaceholder('Search jobs, skills or companies')).toHaveValue('E2E')
   await screenshot(page, 'jobs-mobile')
@@ -58,7 +65,12 @@ test('guest application, passwordless verification, composer publishing, and med
   const mail = await (await request.get(`/api/v1/auth/test-mail/latest?email=${encodeURIComponent(email)}`)).json()
   await page.getByLabel('Verification code').fill(mail.data.code)
   await page.getByRole('button', { name: 'Verify and continue' }).click()
-  await expect(page.getByRole('link', { name: /Continue to E2E Fixture Board/ })).toBeVisible()
+  await expect(page.getByLabel(/I agree to the current/)).toBeVisible()
+  await page.getByLabel(/I agree to the current/).check()
+  await page.getByLabel(/I confirm that I am at least 18/).check()
+  await expect(page.getByLabel(/Email me optional/)).not.toBeChecked()
+  await page.getByRole('button', { name: 'Verify and continue' }).click()
+  await expect(page.getByRole('link', { name: /Continue to E2E Fixture Board/ })).toBeVisible({ timeout: 45000 })
   await expect(page.getByText(/opens an external website/)).toBeVisible()
   await screenshot(page, 'apply-continuation')
   const popupPromise = context.waitForEvent('page')
@@ -94,13 +106,13 @@ test('guest application, passwordless verification, composer publishing, and med
   await context.request.post('/api/v1/auth/logout', { data: {} })
 
   // Every requested route renders the same shared theme on a small and wide viewport.
-  const routes = ['/', '/sign-in', '/settings', '/notifications', '/hiring', '/saved', '/applications', '/jobs']
+  const routes = ['/', '/sign-in', '/settings', '/notifications', '/hiring', '/saved', '/applications', '/jobs', '/legal', '/legal/terms', '/legal/privacy', '/legal/cookies', '/legal/acceptable-use', '/legal/community-guidelines', '/legal/job-disclaimer', '/legal/privacy-rights']
   for (const viewport of [{ width: 390, height: 844, name: 'mobile' }, { width: 1440, height: 1000, name: 'desktop' }]) {
     await page.setViewportSize(viewport)
     for (const route of routes) {
-      await page.goto(route)
-      await page.waitForLoadState('networkidle')
+      await page.goto(route, { waitUntil: 'domcontentloaded', timeout: 45000 })
       await expect(page.locator('body')).toBeVisible()
+      if (route.startsWith('/legal')) await expect(page.getByText('Draft for legal review').first()).toBeVisible()
       const dimensions = await page.evaluate(() => ({
         width: window.innerWidth,
         scrollWidth: document.documentElement.scrollWidth,
@@ -114,5 +126,16 @@ test('guest application, passwordless verification, composer publishing, and med
       await screenshot(page, `${route === '/' ? 'home' : route.slice(1)}-${viewport.name}`)
     }
   }
+  const manifest = await request.get('/manifest.webmanifest')
+  expect(manifest.status()).toBe(200)
+  expect((await manifest.json()).icons.map((icon: { sizes: string }) => icon.sizes)).toEqual(expect.arrayContaining(['192x192', '512x512']))
+  for (const iconPath of ['/joblite.png', '/apple-touch-icon.png', '/share-card.v1.png']) {
+    const response = await request.get(iconPath)
+    expect(response.status()).toBe(200)
+    expect(response.headers()['content-type']).toContain('image/png')
+  }
+  const shareImage = await (await request.get('/share-card.v1.png')).body()
+  expect(shareImage.readUInt32BE(16)).toBe(1200)
+  expect(shareImage.readUInt32BE(20)).toBe(630)
   expect(consoleErrors).toEqual([])
 })

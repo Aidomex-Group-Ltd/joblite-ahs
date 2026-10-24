@@ -44,4 +44,4 @@ crons = ["*/5 * * * *", "*/30 * * * *"]
 
 [vars]
 ENVIRONMENT = "production"
-APP_URL = "https://joblite-ahs.aidomexgroupltd.workers.dev"
+APP_URL = "https://joblite.online"

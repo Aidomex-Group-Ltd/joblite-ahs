@@ -3,12 +3,20 @@ import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-do
 import { apiGet, apiPost, ApiError, errorMessage } from '../lib/api'
 import { useSession } from '../lib/session'
 import { JobliteBrand } from './JobliteBrand'
+import { CURRENT_TERMS_VERSION } from '../../shared/legal-versions'
 
 type Intent = 'publish-post' | 'apply-source' | 'save' | 'like' | 'comment' | 'notifications' | 'profile' | 'create-job' | 'apply'
 type AuthRequest = { intent?: string; jobId?: string; nextPath?: string }
 type AuthContextValue = { openAuth: (request?: AuthRequest) => void; closeAuth: () => void }
 const AuthContext = createContext<AuthContextValue | null>(null)
 const validIntents = new Set<Intent>(['publish-post','apply-source','save','like','comment','notifications','profile','create-job','apply'])
+async function legalContext() {
+  let region = localStorage.getItem('joblite:legal-region') || ''
+  if (!region) {
+    try { region = (await apiGet<{ region: string }>('/legal/region')).data.region } catch { region = 'unknown' }
+  }
+  return { region: region || 'unknown', language: navigator.language || 'en' }
+}
 
 export function safeInternalPath(value: string | null | undefined): string {
   if (!value || !value.startsWith('/') || value.startsWith('//') || value.startsWith('/\\') || /[\\\u0000-\u001f]/.test(value) || /%(?![\da-f]{2})/i.test(value)) return '/'
@@ -57,6 +65,10 @@ function AuthDialog({ request, onClose }: { request: AuthRequest; onClose: () =>
   const [resendIn, setResendIn] = useState(0)
   const [error, setError] = useState('')
   const [destination, setDestination] = useState<{ url: string; source: string } | null>(null)
+  const [termsRequired, setTermsRequired] = useState(false)
+  const [termsAccepted, setTermsAccepted] = useState(false)
+  const [ageConfirmed, setAgeConfirmed] = useState(false)
+  const [marketingConsent, setMarketingConsent] = useState(false)
   const dialog = useRef<HTMLDivElement>(null)
   const intent = (validIntents.has(request.intent as Intent) ? request.intent : undefined) as Intent | undefined
   const copy = intent === 'apply-source' ? 'Sign in to continue to the original job posting.' : intent === 'publish-post' ? 'Sign in to publish your post. Your draft stays on this device.' : intent === 'save' ? 'Sign in to save this opportunity to your account.' : 'Continue with email to access your Joblite account.'
@@ -85,7 +97,7 @@ function AuthDialog({ request, onClose }: { request: AuthRequest; onClose: () =>
     event.preventDefault(); if (busy) return
     setBusy(true); setError('')
     try {
-      const response = await apiPost<{ challenge_id: string; resend_after: number }>('/auth/challenges', { email })
+      const response = await apiPost<{ challenge_id: string; resend_after: number }>('/auth/challenges', { email, ...await legalContext() })
       setChallenge(response.data.challenge_id); setResendIn(response.data.resend_after || 60); setStage('code')
     } catch (cause) { if (cause instanceof ApiError && cause.retryAfter) setResendIn(cause.retryAfter); setError(errorMessage(cause)) } finally { setBusy(false) }
   }
@@ -93,17 +105,17 @@ function AuthDialog({ request, onClose }: { request: AuthRequest; onClose: () =>
     event.preventDefault(); if (busy) return
     setBusy(true); setError('')
     try {
-      await apiPost('/auth/verify', { challenge_id: challenge, code })
+      await apiPost('/auth/verify', { challenge_id: challenge, code, terms_accepted: termsAccepted, age_confirmed: ageConfirmed, terms_version: CURRENT_TERMS_VERSION, marketing_consent: marketingConsent })
       await session.refresh()
       if (intent === 'apply-source') { setStage('continue'); return }
       const target = safeInternalPath(request.nextPath || (intent === 'publish-post' ? '/compose' : location.pathname + location.search))
       onClose(); if (target !== location.pathname + location.search) navigate(target)
-    } catch (cause) { setError(errorMessage(cause)) } finally { setBusy(false) }
+    } catch (cause) { if (cause instanceof ApiError && cause.status === 428) setTermsRequired(true); setError(errorMessage(cause)) } finally { setBusy(false) }
   }
   async function resend() {
     if (busy) return
     setBusy(true); setError('')
-    try { const response = await apiPost<{ challenge_id: string; resend_after: number }>('/auth/challenges', { email }); setChallenge(response.data.challenge_id); setResendIn(response.data.resend_after || 60); setCode('') }
+    try { const response = await apiPost<{ challenge_id: string; resend_after: number }>('/auth/challenges', { email, ...await legalContext() }); setChallenge(response.data.challenge_id); setResendIn(response.data.resend_after || 60); setCode('') }
     catch (cause) { if (cause instanceof ApiError && cause.retryAfter) setResendIn(cause.retryAfter); setError(errorMessage(cause)) } finally { setBusy(false) }
   }
   const isSheet = typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches
@@ -119,7 +131,7 @@ function AuthDialog({ request, onClose }: { request: AuthRequest; onClose: () =>
       <header><JobliteBrand /><button className="jl-auth-close" type="button" onClick={onClose} aria-label="Close sign in">×</button></header>
       {session.user && intent === 'apply-source' ? <div className="jl-auth-body"><h1 id="jl-auth-title">Continue to the job</h1><p>{error || (destination ? `You’re signed in. Continue to ${destination.source}; this opens an external website.` : 'Checking the original job link…')}</p>{destination && <a className="btn jl-auth-submit" href={destination.url} target="_blank" rel="noopener noreferrer" onClick={onClose}>Continue to {destination.source} ↗</a>}</div> : <div className="jl-auth-body">
         <h1 id="jl-auth-title">{stage === 'code' ? 'Check your email' : 'Welcome to Joblite'}</h1><p>{stage === 'code' ? `Enter the six-digit code sent to ${email}.` : copy}</p>
-        {stage === 'email' ? <form className="jl-auth-form" onSubmit={send}><label>Email address<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label><button className="btn jl-auth-submit" disabled={busy || resendIn > 0}>{busy ? 'Sending code…' : resendIn > 0 ? `Try again in ${resendIn}s` : 'Continue with email'}</button></form> : <form className="jl-auth-form" onSubmit={verify}><label>Verification code<input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9 ]{6,8}" maxLength={8} required value={code} onChange={(event) => setCode(event.target.value.replace(/[^0-9 ]/g, '').slice(0, 8))} placeholder="123456" /></label><button className="btn jl-auth-submit" disabled={busy || code.replace(/\s/g,'').length !== 6}>{busy ? 'Verifying…' : 'Verify and continue'}</button><div className="jl-auth-links"><button type="button" onClick={() => { setStage('email'); setError('') }}>Change email</button><button type="button" disabled={busy || resendIn > 0} onClick={() => void resend()}>{resendIn > 0 ? `Resend in ${resendIn}s` : 'Resend code'}</button></div></form>}
+        {stage === 'email' ? <form className="jl-auth-form" onSubmit={send}><label>Email address<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label><button className="btn jl-auth-submit" disabled={busy || resendIn > 0}>{busy ? 'Sending code…' : resendIn > 0 ? `Try again in ${resendIn}s` : 'Continue with email'}</button></form> : <form className="jl-auth-form" onSubmit={verify}><label>Verification code<input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9 ]{6,8}" maxLength={8} required value={code} onChange={(event) => setCode(event.target.value.replace(/[^0-9 ]/g, '').slice(0, 8))} placeholder="123456" /></label>{termsRequired ? <div className="jl-auth-legal-checks"><label><input type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} /> I agree to the current <Link to="/legal/terms" target="_blank">Terms of Service</Link> (version {CURRENT_TERMS_VERSION}).</label><label><input type="checkbox" checked={ageConfirmed} onChange={(event) => setAgeConfirmed(event.target.checked)} /> I confirm that I am at least 18. Joblite does not currently offer a parent or guardian consent process.</label><label><input type="checkbox" checked={marketingConsent} onChange={(event) => setMarketingConsent(event.target.checked)} /> Email me optional Joblite product updates. This is optional and can be withdrawn later.</label><p><Link to="/legal/privacy" target="_blank">Privacy Notice</Link> explains processing. Marketing consent is not required to create an account.</p></div> : null}<button className="btn jl-auth-submit" disabled={busy || code.replace(/\s/g,'').length !== 6 || (termsRequired && (!termsAccepted || !ageConfirmed))}>{busy ? 'Verifying…' : 'Verify and continue'}</button><div className="jl-auth-links"><button type="button" onClick={() => { setStage('email'); setError('') }}>Change email</button><button type="button" disabled={busy || resendIn > 0} onClick={() => void resend()}>{resendIn > 0 ? `Resend in ${resendIn}s` : 'Resend code'}</button></div></form>}
         {error && <p className="jl-auth-error" role="alert">{error}</p>}<p className="jl-auth-footnote">No password needed. If you already have an account, this signs you in.</p>
         {!request.intent && <Link className="jl-auth-secondary" to="/" onClick={onClose}>Back to Joblite</Link>}
       </div>}

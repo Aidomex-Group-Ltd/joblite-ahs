@@ -354,12 +354,7 @@
   width: 56px;
   height: 56px;
   border-radius: 15px;
-  background: var(--cp-blue);
-  color: #fff;
-  display: grid;
-  place-items: center;
-  font-size: 32px;
-  font-weight: 900;
+  object-fit: contain;
   margin: 0 auto 16px;
 }
 

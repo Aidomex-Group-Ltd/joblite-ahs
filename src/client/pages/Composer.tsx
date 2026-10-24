@@ -284,7 +284,7 @@ export default function Composer() {
           <span aria-hidden="true" />
         </header>
         <main className="composer-gate">
-          <div className="composer-gate-mark" aria-hidden="true">J</div>
+          <img className="composer-gate-mark" src="/joblite.png" alt="" />
           <h1>Sign in to share with Joblite</h1>
           <p>
             Publishing is tied to a real account so people can reply and you can manage your own posts. You can still

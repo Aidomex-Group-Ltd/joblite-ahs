@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { nanoid } from 'nanoid'
 import { clearedSessionCookie, sessionCookie, shouldUseSecureCookie } from '../middleware/security'
+import { CURRENT_TERMS_VERSION } from '../../shared/legal-versions'
 
 const app = new Hono<AppContext>()
 const CODE_TTL_SECONDS = 10 * 60
@@ -18,6 +19,8 @@ type ChallengeRow = {
   expires_at: number
   attempts: number
   consumed_at: number | null
+  presented_region: string | null
+  language: string | null
 }
 
 // Local Playwright mail sink only. This route is absent from production behavior.
@@ -72,8 +75,8 @@ app.post('/challenges', async (c) => {
     c.env.DB.prepare('UPDATE auth_challenges SET consumed_at = ? WHERE email_normalized = ? AND consumed_at IS NULL')
       .bind(now, email),
     c.env.DB.prepare(
-      'INSERT INTO auth_challenges (id, token_hash, email_normalized, purpose, expires_at, created_at) VALUES (?,?,?,?,?,?)'
-    ).bind(challengeId, tokenHash, email, 'login', expiresAt, now),
+      'INSERT INTO auth_challenges (id, token_hash, email_normalized, purpose, expires_at, created_at, terms_version, presented_region, language) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).bind(challengeId, tokenHash, email, 'login', expiresAt, now, CURRENT_TERMS_VERSION, validRegion(body.region), validLanguage(body.language)),
   ])
 
   try {
@@ -115,7 +118,7 @@ app.post('/verify', async (c) => {
 
   const now = Math.floor(Date.now() / 1000)
   const challenge = await c.env.DB.prepare(
-    'SELECT id, token_hash, email_normalized, expires_at, attempts, consumed_at FROM auth_challenges WHERE id = ?'
+    'SELECT id, token_hash, email_normalized, expires_at, attempts, consumed_at, presented_region, language FROM auth_challenges WHERE id = ?'
   ).bind(challengeId).first<ChallengeRow>()
   if (!challenge) return invalidCode(c)
   if (challenge.consumed_at !== null) {
@@ -139,6 +142,16 @@ app.post('/verify', async (c) => {
     return invalidCode(c)
   }
 
+  const existingUser = await c.env.DB.prepare('SELECT id FROM users WHERE email_normalized = ?')
+    .bind(challenge.email_normalized).first<{ id: string }>()
+  const termsAccepted = body.terms_accepted === true && body.terms_version === CURRENT_TERMS_VERSION
+  if (!existingUser && !termsAccepted) {
+    return c.json({ error: { code: 'TERMS_ACCEPTANCE_REQUIRED', message: 'Accept the current Terms and confirm you meet Joblite’s age requirement to create an account. Your verification code is still valid.' } }, 428)
+  }
+  if (!existingUser && body.age_confirmed !== true) {
+    return c.json({ error: { code: 'AGE_CONFIRMATION_REQUIRED', message: 'Confirm that you are at least 18 to create a Joblite account. Your verification code is still valid.' } }, 428)
+  }
+
   // This conditional update is the single-use lock. Concurrent correct requests
   // race on the same row; exactly one can consume the challenge and create a session.
   const consumed = await c.env.DB.prepare(
@@ -146,8 +159,26 @@ app.post('/verify', async (c) => {
   ).bind(now, challenge.id, tokenHash, now, MAX_CODE_ATTEMPTS).run()
   if ((consumed.meta?.changes ?? 0) !== 1) return invalidCode(c)
 
-  await c.env.DB.prepare('INSERT OR IGNORE INTO users (id, email_normalized, verified_at, created_at, updated_at) VALUES (?,?,?,?,?)')
-    .bind(nanoid(), challenge.email_normalized, now, now, now).run()
+  const newUserId = nanoid()
+  const records = [
+    c.env.DB.prepare('INSERT OR IGNORE INTO users (id, email_normalized, verified_at, created_at, updated_at) VALUES (?,?,?,?,?)')
+      .bind(newUserId, challenge.email_normalized, now, now, now),
+  ]
+  if (!existingUser && termsAccepted) {
+    records.push(c.env.DB.prepare(
+      `INSERT OR IGNORE INTO legal_records (id, user_id, document_id, document_version, action, region, language, created_at)
+       SELECT ?, id, 'terms', ?, 'acceptance', ?, ?, ? FROM users WHERE email_normalized = ?`
+    ).bind(nanoid(), CURRENT_TERMS_VERSION, challenge.presented_region || 'unknown', challenge.language || 'en', now, challenge.email_normalized))
+    records.push(c.env.DB.prepare(
+      `INSERT OR IGNORE INTO legal_records (id, user_id, document_id, document_version, action, purpose, region, language, created_at)
+       SELECT ?, id, 'privacy-choices', 'v1-2026-10-24', ?, 'marketing', ?, ?, ? FROM users WHERE email_normalized = ?`
+    ).bind(nanoid(), body.marketing_consent === true ? 'consent_grant' : 'consent_refusal', challenge.presented_region || 'unknown', challenge.language || 'en', now, challenge.email_normalized))
+    records.push(c.env.DB.prepare(
+      `INSERT OR IGNORE INTO legal_records (id, user_id, document_id, document_version, action, region, language, created_at)
+       SELECT ?, id, 'age-attestation', 'age-policy-v1-2026-10-24-draft', 'acceptance', ?, ?, ? FROM users WHERE email_normalized = ?`
+    ).bind(nanoid(), challenge.presented_region || 'unknown', challenge.language || 'en', now, challenge.email_normalized))
+  }
+  await c.env.DB.batch(records)
   const user = await c.env.DB.prepare('SELECT id, email_normalized, state, display_name FROM users WHERE email_normalized = ?')
     .bind(challenge.email_normalized).first<{ id: string; email_normalized: string; state: string; display_name: string | null }>()
   if (!user || user.state !== 'active') {
@@ -263,6 +294,14 @@ async function hashToken(token: string, secret: string): Promise<string> {
   const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
   const sig = await crypto.subtle.sign('HMAC', key, enc.encode(token))
   return Array.from(new Uint8Array(sig), (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function validRegion(value: unknown): string {
+  return typeof value === 'string' && ['UG','EEA','UK','other','unknown'].includes(value) ? value : 'unknown'
+}
+
+function validLanguage(value: unknown): string {
+  return typeof value === 'string' && /^[a-z]{2}(-[A-Z]{2})?$/.test(value) ? value : 'en'
 }
 
 export default app

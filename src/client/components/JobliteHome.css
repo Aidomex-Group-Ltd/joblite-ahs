@@ -3,6 +3,7 @@
 
 /* Integration additions: attachment previews, pagination, unread badges and media grids. */
 .jl-app button.jl-brand{border:0;background:none;padding:0;font:inherit;font-size:23px;font-weight:800;letter-spacing:-.8px;display:flex;gap:9px;align-items:center}
+.jl-app .jl-brand-logo{display:block;width:42px;height:42px;flex:0 0 42px;object-fit:contain;border-radius:10px}
 .jl-bell{position:relative}
 .jl-bell-count{position:absolute;top:1px;right:1px;min-width:15px;height:15px;padding:0 3px;border-radius:20px;background:#f0446d;color:#fff;border:1.5px solid #fff;font-size:9px;line-height:12px;font-weight:700;text-align:center}
 .jl-inline-count{margin-left:auto;background:#e8f1ff;color:#087cff;border-radius:20px;font-size:11px;padding:1px 7px;font-weight:700}
@@ -25,6 +26,7 @@
 .jl-load-more:disabled{color:var(--jl-muted)}
 @media(max-width:760px){
   .jl-app button.jl-brand{font-size:21px}
+  .jl-app .jl-brand-logo{width:38px;height:38px;flex-basis:38px}
   .jl-attachments{margin-left:42px}
   .jl-post-media-grid.multiple{grid-template-columns:1fr 1fr}
   .jl-post-media-grid.multiple .jl-post-media{max-height:140px}

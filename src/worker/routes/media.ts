@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { nanoid } from 'nanoid'
-import { requireAuth } from '../middleware/auth'
+import { optionalAuth, requireAuth } from '../middleware/auth'
 import { slugify } from '../lib/validate'
 
 const app = new Hono<AppContext>()
@@ -139,16 +139,25 @@ app.post('/:id/complete', requireAuth, async (c) => {
   return c.json({ data: { id: mediaId, state: 'ready', url: `/api/v1/media/${mediaId}/content` } })
 })
 
-app.get('/:id/content', async (c) => {
+app.get('/:id/content', optionalAuth, async (c) => {
   const mediaId = c.req.param('id')
   const media = await c.env.DB.prepare("SELECT * FROM media WHERE id = ? AND state = 'ready'").bind(mediaId).first<any>()
   if (!media) return c.json({ error: { code: 'NOT_FOUND', message: 'Media not found' } }, 404)
+
+  const publicAttachment = await c.env.DB.prepare(
+    `SELECT pm.post_id FROM post_media pm JOIN posts p ON p.id = pm.post_id
+     WHERE pm.media_id = ? AND p.state = 'published' AND p.visibility = 'public' LIMIT 1`
+  ).bind(mediaId).first()
+  const user = c.get('user')
+  if (!publicAttachment && (!user || user.id !== media.owner_id)) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Media not found' } }, 404)
+  }
 
   const rangeHeader = c.req.header('Range')
   const contentType = media.mime_type || 'application/octet-stream'
   const headers = new Headers({
     'Content-Type': contentType,
-    'Cache-Control': 'public, max-age=31536000, immutable',
+    'Cache-Control': publicAttachment ? 'public, max-age=300, s-maxage=300' : 'private, no-store',
     'X-Content-Type-Options': 'nosniff',
     'Accept-Ranges': 'bytes',
   })

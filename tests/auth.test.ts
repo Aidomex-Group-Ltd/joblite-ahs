@@ -24,6 +24,9 @@ describe('passwordless email authentication', () => {
   async function readCode(email: string) {
     return db.prepare('SELECT code, challenge_id FROM auth_test_mail WHERE email_normalized = ? ORDER BY created_at DESC LIMIT 1').bind(email).first<{ code: string; challenge_id: string }>()
   }
+  async function verifyCode(challengeId: string | undefined, code: string | undefined, accepted = true) {
+    return api(env)('/auth/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge_id: challengeId, code, terms_accepted: accepted, terms_version: 'terms-v1-2026-10-24-draft', age_confirmed: accepted }) })
+  }
 
   it('creates one account after a successful test-mail verification and supports existing-account sign-in', async () => {
     const first = await requestCode()
@@ -34,7 +37,7 @@ describe('passwordless email authentication', () => {
     expect(mail?.code).toMatch(/^\d{6}$/)
     const protectedCode = await db.prepare('SELECT token_hash FROM auth_challenges WHERE id = ?').bind(mail?.challenge_id).first<{ token_hash: string }>()
     expect(protectedCode?.token_hash).not.toBe(mail?.code)
-    const verified = await api(env)('/auth/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge_id: mail?.challenge_id, code: mail?.code }) })
+    const verified = await verifyCode(mail?.challenge_id, mail?.code)
     expect(verified.status).toBe(200)
     const cookie = verified.headers.get('set-cookie') || ''
     expect(cookie).toContain('HttpOnly')
@@ -45,7 +48,7 @@ describe('passwordless email authentication', () => {
     await db.prepare('UPDATE auth_test_mail SET created_at = created_at - 120 WHERE email_normalized = ?').bind('person@example.test').run()
     await requestCode()
     const secondMail = await readCode('person@example.test')
-    const second = await api(env)('/auth/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge_id: secondMail?.challenge_id, code: secondMail?.code }) })
+    const second = await verifyCode(secondMail?.challenge_id, secondMail?.code)
     expect(second.status).toBe(200)
     expect((await db.prepare('SELECT COUNT(*) as total FROM users WHERE email_normalized = ?').bind('person@example.test').first<{ total: number }>())?.total).toBe(1)
   })
@@ -54,31 +57,31 @@ describe('passwordless email authentication', () => {
     await requestCode()
     const old = (await readCode('person@example.test'))!
     await requestCode('new@example.test')
-    const bad = await api(env)('/auth/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge_id: old.challenge_id, code: '111111' }) })
+    const bad = await verifyCode(old.challenge_id, '111111')
     expect(bad.status).toBe(401)
-    const success = await api(env)('/auth/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge_id: old.challenge_id, code: old.code }) })
+    const success = await verifyCode(old.challenge_id, old.code)
     expect(success.status).toBe(200)
-    const reused = await api(env)('/auth/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge_id: old.challenge_id, code: old.code }) })
+    const reused = await verifyCode(old.challenge_id, old.code)
     expect(reused.status).toBe(401)
 
     await requestCode('expired@example.test')
     const expired = (await readCode('expired@example.test'))!
     await db.prepare('UPDATE auth_challenges SET expires_at = 1 WHERE id = ?').bind(expired.challenge_id).run()
-    const expiredResponse = await api(env)('/auth/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge_id: expired.challenge_id, code: expired.code }) })
+    const expiredResponse = await verifyCode(expired.challenge_id, expired.code)
     expect(expiredResponse.status).toBe(401)
 
     await requestCode('superseded@example.test')
     const superseded = (await readCode('superseded@example.test'))!
     await db.prepare('UPDATE auth_challenges SET created_at = created_at - 100 WHERE id = ?').bind(superseded.challenge_id).run()
     await requestCode('superseded@example.test')
-    const supersededResponse = await api(env)('/auth/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge_id: superseded.challenge_id, code: superseded.code }) })
+    const supersededResponse = await verifyCode(superseded.challenge_id, superseded.code)
     expect(supersededResponse.status).toBe(401)
   })
 
   it('allows only one concurrent verification to consume a challenge', async () => {
     await requestCode('concurrent@example.test')
     const mail = (await readCode('concurrent@example.test'))!
-    const verify = () => api(env)('/auth/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge_id: mail.challenge_id, code: mail.code }) })
+    const verify = () => verifyCode(mail.challenge_id, mail.code)
     const responses = await Promise.all([verify(), verify()])
     expect(responses.map((response) => response.status).sort()).toEqual([200, 401])
     expect((await db.prepare('SELECT COUNT(*) as total FROM users WHERE email_normalized = ?').bind('concurrent@example.test').first<{ total: number }>())?.total).toBe(1)

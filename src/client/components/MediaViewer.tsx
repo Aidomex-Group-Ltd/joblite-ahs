@@ -408,9 +408,9 @@ export default function MediaViewer(props: Props) {
         <button ref={closeRef} type="button" className="mv-icon-button" aria-label="Close media viewer" onClick={props.onClose}>
           <Icon name="close" />
         </button>
-        <div className="mv-brand" aria-label="Joblite AHS">
-          <span className="mv-brand-mark">J</span>
-          Joblite AHS
+        <div className="mv-brand" aria-label="Joblite AHIS">
+          <img className="mv-brand-image" src="/joblite.png" alt="" />
+          Joblite AHIS
         </div>
         <div className="mv-menu-wrap">
           <button
