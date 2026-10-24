@@ -10,7 +10,7 @@ Last updated: 2026-10-24
 - [x] Additive D1 provenance/deduplication schema and paginated/searchable jobs API; authenticated local sync command
 - [x] Wrangler dev/deploy scripts explicitly serve `dist/client` assets
 
-**Sync evidence:** authenticated local sync ran against the development Worker and D1: 6 provider sources succeeded, 1 was skipped due to Remotive's six-hour interval, 0 failed; 13 jobs inserted and 472 existing records updated. Production D1 has migrations `0003` and `0004` applied. The first live jobs request showed 0 records; after authenticated sync, the live jobs API showed 65 imported jobs and a successful sync timestamp. The sync POST client timed out waiting for its response, so its per-provider run summary was not captured.
+**Sync evidence:** authenticated local sync ran against the development Worker and D1: 6 provider sources succeeded, 1 was skipped due to Remotive's six-hour interval, 0 failed; 13 jobs inserted and 472 existing records updated. Production D1 has migrations `0003` and `0004` applied. The first live jobs request showed 0 records; after authenticated sync, the live jobs API returned 109 imported jobs from Remote OK and Remotive, with a current successful sync timestamp. The sync POST client timed out waiting for its response, so its per-provider run summary was not captured.
 
 **Empty-feed root cause:** the prior home page only fetched community posts and never requested the existing jobs API. The updated home feed now requests the paginated jobs endpoint and merges real job records with posts; provider sync populates/refreshed its stored catalog.
 
