@@ -46,6 +46,10 @@ The same route is available to signed-in organization administrators. Never expo
 Local setup and deployment require a built frontend because Wrangler serves `dist/client` as Worker assets. Run
 `npm run build` before `npm run dev` or `npm run deploy`. `npm run deploy` deploys the Worker and built assets; apply
 reviewed production D1 migrations separately with `npx wrangler d1 migrations apply joblite-db --remote --config wrangler.toml`.
+Production secrets are `SESSION_SECRET` and `CSRF_SECRET`; set them with `npx wrangler secret put <NAME> --config wrangler.toml`.
+For a bearer-authenticated production sync, also set `INGEST_TOKEN` with that command. Organization administrators may
+run the same admin sync endpoint with their authenticated session. Optional Stream and email integrations use
+`STREAM_ACCOUNT_ID`, `STREAM_API_TOKEN`, and `EMAIL_API_KEY`.
 
 ## Documentation
 See `docs/Joblite-AHS-docs/` for full product, architecture, and API specifications.
