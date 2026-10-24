@@ -2,7 +2,10 @@ name = "joblite-ahs"
 main = "src/worker/index.ts"
 compatibility_date = "2024-10-01"
 compatibility_flags = ["nodejs_compat"]
-routes = [{ pattern = "joblite.online", custom_domain = true }]
+keep_vars = true
+workers_dev = true
+preview_urls = true
+routes = [{ pattern = "joblite.online", custom_domain = true, previews_enabled = true }]
 
 [assets]
 directory = "./dist/client"
