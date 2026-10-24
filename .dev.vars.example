@@ -5,6 +5,10 @@
 SESSION_SECRET=REPLACE_WITH_SESSION_SECRET
 CSRF_SECRET=REPLACE_WITH_CSRF_SECRET
 
+# Optional bearer token for POST /api/v1/admin/sync (local initial sync and
+# operations). Keep it server-side; never expose it to the frontend.
+INGEST_TOKEN=REPLACE_WITH_RANDOM_TOKEN
+
 # Optional: Stream and email configuration
 # STREAM_ACCOUNT_ID=
 # STREAM_API_TOKEN=

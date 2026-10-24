@@ -34,10 +34,18 @@ app.post('/', async (c) => {
   // Get profile for snapshot
   const profile = await c.env.DB.prepare('SELECT * FROM profiles WHERE user_id = ?').bind(user.id).first()
   
-  // Atomic-ish operations
-  await c.env.DB.prepare(
-    'INSERT INTO applications (id, candidate_id, job_id, stage, version, submitted_at, updated_at) VALUES (?,?,?,?,?,?,?)'
-  ).bind(appId, user.id, jobId, 'submitted', 1, now, now).run()
+  // Atomic-ish operations. The unique(candidate_id, job_id) constraint is the
+  // final guard against two concurrent submissions creating duplicates.
+  try {
+    await c.env.DB.prepare(
+      'INSERT INTO applications (id, candidate_id, job_id, stage, version, submitted_at, updated_at) VALUES (?,?,?,?,?,?,?)'
+    ).bind(appId, user.id, jobId, 'submitted', 1, now, now).run()
+  } catch {
+    const raced = await c.env.DB.prepare('SELECT * FROM applications WHERE candidate_id = ? AND job_id = ?')
+      .bind(user.id, jobId).first()
+    if (raced) return c.json({ data: raced })
+    throw new Error('Could not create application')
+  }
   
   await c.env.DB.prepare(
     'INSERT INTO application_snapshots (id, application_id, profile_json, job_json, cv_media_id, schema_version, created_at) VALUES (?,?,?,?,?,?,?)'
@@ -74,9 +82,14 @@ app.get('/:id', async (c) => {
     }
   }
   
+  const isCandidate = application.candidate_id === user.id
   const snapshot = await c.env.DB.prepare('SELECT * FROM application_snapshots WHERE application_id = ?').bind(appId).first()
-  const events = await c.env.DB.prepare('SELECT * FROM application_events WHERE application_id = ? ORDER BY created_at ASC').bind(appId).all()
-  const notes = application.candidate_id === user.id ? { results: [] } : await c.env.DB.prepare('SELECT * FROM employer_notes WHERE application_id = ?').bind(appId).all()
+  const events = isCandidate
+    ? await c.env.DB.prepare(
+        'SELECT * FROM application_events WHERE application_id = ? AND candidate_visible = 1 ORDER BY created_at ASC'
+      ).bind(appId).all()
+    : await c.env.DB.prepare('SELECT * FROM application_events WHERE application_id = ? ORDER BY created_at ASC').bind(appId).all()
+  const notes = isCandidate ? { results: [] } : await c.env.DB.prepare('SELECT * FROM employer_notes WHERE application_id = ? ORDER BY created_at DESC').bind(appId).all()
   const offers = await c.env.DB.prepare('SELECT * FROM offers WHERE application_id = ? ORDER BY version DESC').bind(appId).all()
   
   return c.json({ data: { ...application, snapshot, events: events.results, notes: notes.results, offers: offers.results } })
@@ -116,6 +129,23 @@ app.post('/:id/transitions', async (c) => {
   await c.env.DB.prepare(
     'INSERT INTO application_events (id, application_id, actor_id, actor_type, event_type, old_stage, new_stage, candidate_visible, metadata_json, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)'
   ).bind(nanoid(), appId, user.id, 'employer', 'application.stage_changed', oldStage, body.to, body.to === 'rejected' ? 0 : 1, JSON.stringify({ reason: body.reason || null }), now).run()
+
+  // Tell the candidate about the new stage. Deduplicated by event key.
+  await c.env.DB.prepare(
+    `INSERT OR IGNORE INTO notifications (id, user_id, event_key, type, payload_json, created_at)
+     VALUES (?,?,?,?,?,?)`
+  ).bind(
+    nanoid(),
+    application.candidate_id,
+    `application-stage:${appId}:${application.version + 1}`,
+    'application.stage_changed',
+    JSON.stringify({ application_id: appId, job_id: application.job_id, stage: body.to, previous_stage: oldStage }),
+    now
+  ).run()
+
+  await c.env.DB.prepare(
+    "INSERT INTO outbox (id, event_id, event_type, payload_json, state, created_at) VALUES (?,?,?,?,'pending',?)"
+  ).bind(nanoid(), nanoid(), 'application.stage_changed', JSON.stringify({ application_id: appId, stage: body.to }), now).run()
   
   return c.json({ data: { stage: body.to, version: application.version + 1 } })
 })
@@ -143,8 +173,78 @@ app.post('/:id/offers', async (c) => {
   await c.env.DB.prepare(
     'INSERT INTO application_events (id, application_id, actor_id, actor_type, event_type, old_stage, new_stage, candidate_visible, metadata_json, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)'
   ).bind(nanoid(), appId, user.id, 'employer', 'offer.issued', application.stage, application.stage, 1, JSON.stringify({ offer_id: offerId }), now).run()
+
+  await c.env.DB.prepare(
+    'INSERT OR IGNORE INTO notifications (id, user_id, event_key, type, payload_json, created_at) VALUES (?,?,?,?,?,?)'
+  ).bind(
+    nanoid(),
+    application.candidate_id,
+    `offer-issued:${offerId}`,
+    'offer.issued',
+    JSON.stringify({ application_id: appId, offer_id: offerId, job_id: application.job_id }),
+    now
+  ).run()
   
   return c.json({ data: { id: offerId, status: 'issued' } }, 201)
+})
+
+app.post('/:id/notes', async (c) => {
+  const user = c.get('user')!
+  const appId = c.req.param('id')
+  const body = await c.req.json().catch(() => ({}))
+  const text = typeof body.body === 'string' ? body.body.trim() : ''
+  if (!text) return c.json({ error: { code: 'INVALID', message: 'Note body required' } }, 400)
+
+  const application = await c.env.DB.prepare(
+    `SELECT a.*, j.organization_id FROM applications a JOIN jobs j ON j.id = a.job_id WHERE a.id = ?`
+  ).bind(appId).first<any>()
+  if (!application) return c.json({ error: { code: 'NOT_FOUND', message: 'Application not found' } }, 404)
+
+  const membership = await c.env.DB.prepare('SELECT id, role FROM memberships WHERE organization_id = ? AND user_id = ?')
+    .bind(application.organization_id, user.id).first<any>()
+  if (!membership || !['owner', 'admin', 'recruiter'].includes(membership.role)) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Not authorized' } }, 403)
+  }
+
+  const noteId = nanoid()
+  const now = Math.floor(Date.now() / 1000)
+  await c.env.DB.prepare(
+    'INSERT INTO employer_notes (id, application_id, author_membership_id, body, created_at, updated_at) VALUES (?,?,?,?,?,?)'
+  ).bind(noteId, appId, membership.id, text, now, now).run()
+  return c.json({ data: { id: noteId } }, 201)
+})
+
+export const offers = new Hono<AppContext>()
+
+// Offers are issued and responded to separately; accepting is never a hire.
+offers.post('/:id/respond', requireAuth, async (c) => {
+  const user = c.get('user')!
+  const offerId = c.req.param('id')
+  const body = await c.req.json().catch(() => ({}))
+  const response = body.response
+  if (!['accepted', 'declined'].includes(response)) {
+    return c.json({ error: { code: 'INVALID', message: 'response must be accepted or declined' } }, 400)
+  }
+
+  const offer = await c.env.DB.prepare(
+    `SELECT o.*, a.candidate_id, a.id as application_id FROM offers o JOIN applications a ON a.id = o.application_id WHERE o.id = ?`
+  ).bind(offerId).first<any>()
+  if (!offer) return c.json({ error: { code: 'NOT_FOUND', message: 'Offer not found' } }, 404)
+  if (offer.candidate_id !== user.id) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Only the candidate can respond to this offer' } }, 403)
+  }
+  if (offer.status !== 'issued') {
+    return c.json({ error: { code: 'INVALID', message: 'This offer is no longer awaiting a response' } }, 409)
+  }
+
+  const now = Math.floor(Date.now() / 1000)
+  await c.env.DB.prepare('UPDATE offers SET response = ?, responded_at = ?, status = ?, updated_at = ? WHERE id = ?')
+    .bind(response, now, response, now, offerId).run()
+  await c.env.DB.prepare(
+    'INSERT INTO application_events (id, application_id, actor_id, actor_type, event_type, old_stage, new_stage, candidate_visible, metadata_json, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)'
+  ).bind(nanoid(), offer.application_id, user.id, 'candidate', 'offer.responded', null, null, 1, JSON.stringify({ offer_id: offerId, response }), now).run()
+
+  return c.json({ data: { id: offerId, response, status: response, hired: false } })
 })
 
 export default app

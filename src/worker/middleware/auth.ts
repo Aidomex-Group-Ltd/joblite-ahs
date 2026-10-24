@@ -21,24 +21,42 @@ export async function requireAuth(c: Context<any>, next: Next) {
   if (!session) {
     return c.json({ error: { code: 'UNAUTHENTICATED', message: 'Invalid session' } }, 401)
   }
-  c.set('user' as any, { id: session.user_id, email: session.email_normalized, verified_at: session.verified_at })
+  c.set('user' as any, { id: session.user_id, email: session.email_normalized, verified_at: session.verified_at, display_name: session.display_name || null })
   c.set('session' as any, session)
   await next()
 }
 
-export async function optionalAuth(c: Context<any>, next: Next) {
+export type SessionUser = {
+  id: string
+  email: string
+  verified_at?: number | null
+  display_name?: string | null
+}
+
+/** Resolves an optional session without requiring one. Used by public reads and admin checks. */
+export async function readSessionUser(c: Context<any>): Promise<SessionUser | null> {
   const cookie = c.req.header('Cookie') || ''
   const match = cookie.match(/joblite_session=([^;]+)/)
-  if (match) {
-    try {
-      const sessionHash = await hashToken(match[1], (c.env as Env).SESSION_SECRET)
-      const session = await (c.env as Env).DB.prepare(
-        'SELECT s.*, u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?'
-      ).bind(sessionHash, Math.floor(Date.now()/1000)).first<any>()
-      if (session) {
-        c.set('user' as any, { id: session.user_id, email: session.email_normalized })
-      }
-    } catch {}
+  if (!match) return null
+  try {
+    const sessionHash = await hashToken(match[1], (c.env as Env).SESSION_SECRET)
+    const session = await (c.env as Env).DB.prepare(
+      'SELECT s.*, u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?'
+    ).bind(sessionHash, Math.floor(Date.now()/1000)).first<any>()
+    if (!session) return null
+    return {
+      id: session.user_id,
+      email: session.email_normalized,
+      verified_at: session.verified_at,
+      display_name: session.display_name || null,
+    }
+  } catch {
+    return null
   }
+}
+
+export async function optionalAuth(c: Context<any>, next: Next) {
+  const user = await readSessionUser(c)
+  if (user) c.set('user' as any, user)
   await next()
 }

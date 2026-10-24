@@ -4,16 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --assets ./dist/client",
     "build": "vite build",
     "preview": "wrangler dev --remote=false",
     "typecheck": "tsc --noEmit",
     "lint": "echo 'lint: basic checks' && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "migrate:local": "wrangler d1 migrations apply joblite-db --local",
-    "migrate:preview": "wrangler d1 migrations apply joblite-db --remote --env preview",
-    "deploy": "wrangler deploy"
+    "migrate:local": "wrangler d1 migrations apply joblite-db --local --config wrangler.toml",
+    "migrate:preview": "wrangler d1 migrations apply joblite-db --remote --env preview --config wrangler.toml",
+    "sync:local": "bash scripts/sync-local.sh",
+    "deploy": "wrangler deploy --assets ./dist/client"
   },
   "dependencies": {
     "hono": "^4.6.3",
@@ -24,7 +25,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20241022.0",
+    "@cloudflare/workers-types": "^5.20261024.1",
     "@types/node": "^22.7.5",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",
@@ -32,6 +33,6 @@
     "typescript": "^5.6.3",
     "vite": "^5.4.8",
     "vitest": "^2.1.2",
-    "wrangler": "^3.80.0"
+    "wrangler": "^4.152.0"
   }
 }

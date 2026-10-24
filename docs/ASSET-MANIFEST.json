@@ -1,0 +1,61 @@
+{
+  "generated_at": "2026-10-24T14:55:00Z",
+  "note": "All assets sourced from Wikimedia Commons with compatible licenses. Attribution required per license terms.",
+  "assets": [
+    {
+      "id": "coworking-columbus",
+      "type": "image",
+      "provider": "wikimedia_commons",
+      "source_url": "https://commons.wikimedia.org/wiki/File:Coworking_Space_in_Columbus_Ohio.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/d/d5/Coworking_Space_in_Columbus_Ohio.jpg",
+      "local_path": "public/media/coworking-columbus.jpg",
+      "creator": "Benlande",
+      "license": "CC0",
+      "license_url": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+      "usage": "Editorial/demo content - coworking/professional workspace imagery",
+      "attribution_required": false
+    },
+    {
+      "id": "coworking-space-2026",
+      "type": "image",
+      "provider": "wikimedia_commons",
+      "source_url": "https://commons.wikimedia.org/wiki/File:Coworking_space_2026-09-27.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/2/25/Coworking_space_2026-09-27.jpg",
+      "local_path": "public/media/coworking-space.jpg",
+      "creator": "JustWritingHere",
+      "license": "CC0",
+      "license_url": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+      "usage": "Editorial/demo content",
+      "attribution_required": false
+    },
+    {
+      "id": "software-developer",
+      "type": "image",
+      "provider": "wikimedia_commons",
+      "source_url": "https://commons.wikimedia.org/wiki/File:Software_Developer_at_Work.jpg",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/4/47/Software_Developer_at_Work.jpg",
+      "local_path": "public/media/software-developer.jpg",
+      "creator": "Tsinkala",
+      "license": "CC BY-SA 4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0",
+      "usage": "Editorial/demo content",
+      "attribution_required": true,
+      "attribution_text": "Tsinkala / Wikimedia Commons / CC BY-SA 4.0"
+    },
+    {
+      "id": "coworking-stopmotion",
+      "type": "video",
+      "provider": "wikimedia_commons",
+      "source_url": "https://commons.wikimedia.org/wiki/File:Conciergerie_d%27un_tiers-lieu_itin%C3%A9rant_-_Stop_motion_HD.dv.webm",
+      "original_url": "https://upload.wikimedia.org/wikipedia/commons/3/36/Conciergerie_d%27un_tiers-lieu_itin%C3%A9rant_-_Stop_motion_HD.dv.webm",
+      "local_path": "public/media/coworking-stopmotion.mp4",
+      "poster": "public/media/coworking-stopmotion-poster.jpg",
+      "creator": "Delphine Duriaux / Au Comptoir Numérique",
+      "license": "CC BY 3.0",
+      "license_url": "https://creativecommons.org/licenses/by/3.0",
+      "usage": "Editorial/demo content with controls, no autoplay audio",
+      "attribution_required": true,
+      "attribution_text": "Delphine Duriaux / Au Comptoir Numérique / Wikimedia Commons / CC BY 3.0"
+    }
+  ]
+}

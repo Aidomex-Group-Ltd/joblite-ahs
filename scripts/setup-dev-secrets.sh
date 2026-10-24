@@ -65,3 +65,11 @@ else
     chmod 600 "$DEV_VARS_FILE"
     echo "Updated development secrets in $DEV_VARS_FILE"
 fi
+
+# The local/admin ingestion command needs a bearer token. Generate one only when
+# missing; never print or overwrite an existing value.
+if ! grep -q '^INGEST_TOKEN=' "$DEV_VARS_FILE"; then
+    printf 'INGEST_TOKEN=%s\n' "$(openssl rand -hex 24)" >> "$DEV_VARS_FILE"
+    chmod 600 "$DEV_VARS_FILE"
+    echo "Added a local INGEST_TOKEN to $DEV_VARS_FILE (value not printed)"
+fi

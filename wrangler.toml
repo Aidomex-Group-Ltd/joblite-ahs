@@ -10,8 +10,8 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "joblite-db"
-database_id = "local-dev-db"
-preview_database_id = "local-preview-db"
+database_id = "369b4d6d-115d-41a3-ab93-132a25063758"
+migrations_dir = "migrations"
 
 [[r2_buckets]]
 binding = "MEDIA"
@@ -36,8 +36,8 @@ max_batch_size = 5
 max_batch_timeout = 10
 
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["*/5 * * * *", "*/30 * * * *"]
 
 [vars]
-ENVIRONMENT = "development"
-APP_URL = "http://localhost:8787"
+ENVIRONMENT = "production"
+APP_URL = "https://joblite-ahs.aidomexgroupltd.workers.dev"

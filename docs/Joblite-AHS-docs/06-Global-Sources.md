@@ -5,7 +5,20 @@ Seed the full maintained ISO 3166-1 country/territory list with searchable names
 ## Source registry
 Every source records official name, URL, API/feed method, permitted fields, attribution, caching/retention limits, redistribution conditions, rate limits, countries, industries, review date and disable reason. Permission states: pending_review, import_allowed, link_only, suspended. Only import_allowed sources run ingestion. Publicly reachable endpoints do not by themselves establish republication permission.
 
-Employer ATS sources such as Greenhouse and Lever may be candidates for adapters, subject to current endpoint documentation and permission review. An employer/board discovery registry is required; an ATS endpoint is not a worldwide employer directory. Do not claim either adapter is approved until documented.
+### Configured providers and conditions
+The additive `0004_real_job_ingestion.sql` migration enables the following specific sources; it does not imply a global search API:
+
+| Provider | Configured scope | Access and display conditions |
+| --- | --- | --- |
+| Remote OK | Its published remote jobs feed | Public JSON/RSS feed; credit Remote OK and link every listing to its original post. |
+| Remotive | Its active remote jobs feed | Public API; mention Remotive and link to each Remotive listing. Refresh no more than four times per day (configured six-hour minimum); API jobs are delayed by 24 hours. |
+| Arbeitnow | Public API jobs (Europe-focused feed) | Public API requires a link back to Arbeitnow; permission may be revoked. Preserve provider destination and regional/location restrictions. |
+| Greenhouse | Explicit Vercel, Figma, and Discord board tokens | Public GET access to the Job Board API; restricted to configured employer boards, with a link to each posting. |
+| Lever | Explicit Spotify board token | The Postings API exposes published postings for a company; this configured board is not global search. |
+
+Review provider terms and configured boards periodically. Disable a source if permission is withdrawn or terms change. Official references: [Remote OK API FAQ](https://remoteok.com/faq), [Remotive API documentation](https://github.com/remotive-com/remote-jobs-api/blob/main/README.md), [Arbeitnow API terms](https://www.arbeitnow.com/terms), [Greenhouse Job Board API](https://docs.greenhouse.io/job-board), and [Lever Postings API](https://github.com/lever/postings-api).
+
+An ATS endpoint is not a worldwide employer directory. Only explicitly configured board tokens are queried; no employer discovery or global search is assumed.
 
 ## Adapter contract
 Each adapter implements discover/configure, fetchPage(cursor), normalize(record), canonicalUrl(record), checkAvailability(record) and health(). Use fixtures and schema validation. Preserve source IDs and country/eligibility evidence. Strip unsafe markup without changing meaning.

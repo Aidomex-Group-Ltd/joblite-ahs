@@ -1,48 +1,139 @@
-import React, { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import React, { useCallback, useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { apiGet, errorMessage } from '../lib/api'
+import { formatDate, stageLabel } from '../lib/format'
+import { signInPath, useSession } from '../lib/session'
+import { EmptyState, ErrorNotice, Loading, PageIntro } from '../components/Common'
+
+type Application = {
+  id: string
+  stage: string
+  version: number
+  submitted_at: number
+  updated_at: number
+  job_id: string
+  title: string
+  origin: 'native' | 'imported'
+  org_name: string | null
+  org_slug: string | null
+}
+
+const STAGES = ['submitted', 'in_review', 'shortlisted', 'interview', 'offer', 'hired', 'rejected', 'withdrawn']
 
 export default function Applications() {
-  const [apps, setApps] = useState<any[]>([])
+  const navigate = useNavigate()
+  const session = useSession()
+  const [applications, setApplications] = useState<Application[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  const load = useCallback(async () => {
+    if (!session.user) {
+      setApplications([])
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    setError('')
+    try {
+      const response = await apiGet<Application[]>('/me/applications')
+      setApplications(response.data || [])
+    } catch (caught) {
+      setError(errorMessage(caught))
+      setApplications([])
+    } finally {
+      setLoading(false)
+    }
+  }, [session.user])
 
   useEffect(() => {
-    fetch('/api/v1/me/applications')
-      .then(r => r.ok ? r.json() as Promise<any> : null)
-      .then(data => {
-        setApps(data?.data || [])
-        setLoading(false)
-      })
-      .catch(() => setLoading(false))
-  }, [])
+    void load()
+  }, [load])
+
+  const counts = applications.reduce<Record<string, number>>((acc, application) => {
+    acc[application.stage] = (acc[application.stage] || 0) + 1
+    return acc
+  }, {})
+
+  if (!session.loading && !session.user) {
+    return (
+      <div className="page">
+        <PageIntro title="My applications" subtitle="Track every application you submit inside Joblite." />
+        <EmptyState
+          title="Sign in to track applications"
+          action={
+            <button type="button" className="btn" onClick={() => navigate(signInPath('applications', '/applications'))}>
+              Sign in
+            </button>
+          }
+        >
+          <p>Applications, interview updates and offers are private to your account.</p>
+        </EmptyState>
+      </div>
+    )
+  }
 
   return (
-    <div>
-      <div className="card">
-        <h2 style={{marginBottom: '8px'}}>My Applications</h2>
-        <p style={{color: 'var(--text-secondary)'}}>Track your application progress</p>
-      </div>
-      {loading && <div className="card">Loading...</div>}
-      {!loading && apps.length === 0 && (
-        <div className="card">
-          <h3>No applications yet</h3>
-          <p style={{color: 'var(--text-secondary)', marginTop: '8px'}}>Apply to native jobs to track them here.</p>
-          <Link to="/jobs" className="btn" style={{display: 'inline-flex', marginTop: '12px', textDecoration: 'none'}}>Browse jobs</Link>
-        </div>
-      )}
-      {apps.map((app: any) => (
-        <div key={app.id} className="card">
-          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'start'}}>
-            <div>
-              <h3 style={{marginBottom: '4px'}}>{app.title}</h3>
-              <p style={{color: 'var(--text-secondary)'}}>{app.org_name || 'Organization'}</p>
+    <div className="page">
+      <PageIntro
+        title="My applications"
+        subtitle="Each application stores an immutable snapshot of your profile at the time you applied."
+        actions={
+          <Link className="btn btn-secondary" to="/jobs">
+            Find jobs
+          </Link>
+        }
+      />
+
+      {applications.length > 0 ? (
+        <div className="stage-summary" aria-label="Application stages">
+          {STAGES.filter((stage) => counts[stage]).map((stage) => (
+            <div key={stage} className="stage-pill">
+              <strong>{counts[stage]}</strong>
+              <span>{stageLabel(stage)}</span>
             </div>
-            <span className="badge">{app.stage}</span>
-          </div>
-          <p style={{color: 'var(--text-secondary)', fontSize: '14px', marginTop: '8px'}}>
-            Submitted {app.submitted_at ? new Date(app.submitted_at * 1000).toLocaleDateString() : ''}
-          </p>
+          ))}
         </div>
-      ))}
+      ) : null}
+
+      {loading ? <Loading label="Loading applications…" /> : null}
+      {!loading && error ? <ErrorNotice message={error} onRetry={() => void load()} /> : null}
+      {!loading && !error && applications.length === 0 ? (
+        <EmptyState
+          title="No applications yet"
+          action={
+            <Link className="btn" to="/jobs">
+              Browse jobs
+            </Link>
+          }
+        >
+          <p>Apply to native jobs to track progress here. Imported jobs are applied for on the original site.</p>
+        </EmptyState>
+      ) : null}
+
+      {!loading && !error && applications.length > 0 ? (
+        <div className="job-list">
+          {applications.map((application) => (
+            <article className="card application-row" key={application.id}>
+              <div>
+                <Link className="link-heading" to={`/applications/${application.id}`}>
+                  {application.title}
+                </Link>
+                <p className="muted">{application.org_name || 'Organization'}</p>
+                <p className="muted small">
+                  Submitted {formatDate(application.submitted_at)} · Updated {formatDate(application.updated_at)}
+                </p>
+              </div>
+              <div className="application-row-actions">
+                <span className={`badge stage-${application.stage}`}>{stageLabel(application.stage)}</span>
+                <Link className="btn btn-secondary" to={`/applications/${application.id}`}>
+                  View timeline
+                </Link>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }

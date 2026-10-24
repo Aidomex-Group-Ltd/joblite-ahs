@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import './Layout.css'
 
@@ -12,7 +12,22 @@ const navItems = [
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation()
-  
+  const [user, setUser] = useState<any>(null)
+  const bare = location.pathname === '/' || location.pathname === '/compose' || /^\/posts\/[^/]+\/media\/\d+$/.test(location.pathname)
+
+  useEffect(() => {
+    if (bare) return
+    fetch('/api/v1/me')
+      .then(r => r.ok ? r.json() as Promise<any> : null)
+      .then(data => {
+        if (data?.data?.user) setUser(data.data.user)
+      })
+      .catch(() => {})
+  }, [bare])
+
+  // The approved feed and the immersive composer/viewer own the full viewport.
+  if (bare) return <>{children}</>
+
   return (
     <div className="layout">
       <header className="header">
@@ -25,7 +40,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </nav>
           <div className="header-actions">
             <button className="icon-btn" aria-label="Notifications">🔔</button>
-            <div className="avatar" aria-label="User avatar">U</div>
+            <div className="avatar" aria-label="User avatar">{user ? user.email[0].toUpperCase() : 'U'}</div>
           </div>
         </div>
       </header>
@@ -66,19 +81,26 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         
         <aside className="sidebar-right desktop-only">
           <div className="card">
-            <h3 style={{fontSize: '18px', marginBottom: '8px'}}>Discover</h3>
+            <h3 style={{fontSize: '18px', marginBottom: '8px', color: 'var(--navy)'}}>Discover</h3>
             <p style={{color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '12px'}}>
-              Search jobs by country, skills and more
+              Find jobs across all countries and industries
             </p>
             <Link to="/jobs" className="btn" style={{display: 'inline-flex', textDecoration: 'none'}}>
-              Find Jobs
+              Browse Jobs
             </Link>
           </div>
           <div className="card">
-            <h4 style={{fontSize: '16px', marginBottom: '8px'}}>My Applications</h4>
-            <p style={{color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '8px'}}>Track your applications</p>
-            <Link to="/applications" style={{fontSize: '14px'}}>View tracker →</Link>
+            <h4 style={{fontSize: '16px', marginBottom: '8px', color: 'var(--navy)'}}>Job Boards</h4>
+            <p style={{color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '8px'}}>Explore external job boards</p>
+            <Link to="/boards" style={{fontSize: '14px'}}>View Directory →</Link>
           </div>
+          {!user && (
+            <div className="card">
+              <h4 style={{fontSize: '16px', marginBottom: '8px', color: 'var(--navy)'}}>Join Joblite</h4>
+              <p style={{color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '8px'}}>Sign in to apply, save jobs, and more</p>
+              <button className="btn btn-secondary" style={{width: '100%'}} onClick={() => alert('Sign in required - use auth API')}>Sign in</button>
+            </div>
+          )}
         </aside>
       </div>
       
