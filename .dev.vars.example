@@ -1,0 +1,11 @@
+# Development environment variables for Wrangler
+# Copy to .dev.vars and populate with secure values
+# Use scripts/setup-dev-secrets.sh to generate automatically
+
+SESSION_SECRET=REPLACE_WITH_SESSION_SECRET
+CSRF_SECRET=REPLACE_WITH_CSRF_SECRET
+
+# Optional: Stream and email configuration
+# STREAM_ACCOUNT_ID=
+# STREAM_API_TOKEN=
+# EMAIL_API_KEY=

@@ -1,0 +1,15 @@
+{
+  "description": "Clearly labelled demo fixtures for local development only",
+  "organizations": [
+    {"name": "DemoTech Inc", "slug": "demotech"}
+  ],
+  "jobs": [
+    {
+      "title": "Frontend Developer (Demo)",
+      "body": "This is a demo job posting for local development and testing.",
+      "employment_type": "full-time",
+      "workplace_arrangement": "remote",
+      "eligibility_mode": "worldwide"
+    }
+  ]
+}
