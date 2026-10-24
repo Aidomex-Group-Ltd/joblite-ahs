@@ -15,7 +15,7 @@ Last updated: 2026-10-24
 
 **Production email configuration:** configured the user-supplied Resend credential as the server-side `EMAIL_API_KEY` compatibility secret because the existing Worker already has a binding named `RESEND_API_KEY`; configured `EMAIL_FROM` as the sender secret. The sender is `noreply@joblite.online`. No test recipient was designated, so real delivery was not smoke-tested. The local E2E mail sink does not prove provider delivery.
 
-**Migration/deploy status:** migration `0005_passwordless_auth.sql` was applied to the isolated E2E database and production D1. Production Worker deployment is performed after final verification.
+**Migration/deploy status:** migration `0005_passwordless_auth.sql` was applied to isolated E2E D1 and production D1. Production deployment completed on 2026-10-24 as Worker version `40e64667-6573-4da8-95b1-0d1ed55847a3`; homepage, all listed SPA routes, and `/api/health/ready` returned HTTP 200 in live checks.
 
 ## Feed and provider integration verification (2026-10-24)
 - [x] X-style Joblite guest feed with server-side job search, country/remote/source filters, truthful source/date/salary labels, saved jobs, external apply links, and real feed states
