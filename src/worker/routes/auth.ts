@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import type { AppContext } from '../types'
 import { nanoid } from 'nanoid'
 import { clearedSessionCookie, sessionCookie, shouldUseSecureCookie } from '../middleware/security'
@@ -12,6 +12,11 @@ const EMAIL_LIMIT = 5
 const IP_LIMIT = 12
 const MAX_CODE_ATTEMPTS = 5
 const DEFAULT_RESEND_SECONDS = 60
+
+app.use('*', async (c, next) => {
+  await next()
+  c.header('Cache-Control', 'no-store')
+})
 
 type ChallengeRow = {
   id: string
@@ -39,10 +44,12 @@ app.get('/test-mail/latest', async (c) => {
 })
 
 app.post('/challenges', async (c) => {
+  const requestId = nanoid(12)
+  c.header('X-Request-ID', requestId)
   const body = await c.req.json().catch(() => ({}))
   const email = typeof body.email === 'string' ? body.email.normalize('NFKC').toLowerCase().trim() : ''
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
-    return c.json({ error: { code: 'INVALID_EMAIL', message: 'Enter a valid email address' } }, 400)
+    return challengeError(c, 400, requestId, 'INVALID_EMAIL', 'Enter a valid email address')
   }
 
   const now = Math.floor(Date.now() / 1000)
@@ -51,9 +58,13 @@ app.post('/challenges', async (c) => {
   ).bind(email).first<{ created_at: number }>()
   const cooldown = Math.max(1, Number(c.env.AUTH_RESEND_COOLDOWN_SECONDS || DEFAULT_RESEND_SECONDS))
   if (recent && recent.created_at + cooldown > now) {
-    return c.json(
-      { error: { code: 'RESEND_COOLDOWN', message: 'Please wait before requesting another code.', retry_after: recent.created_at + cooldown - now } },
-      429
+    return challengeError(
+      c,
+      429,
+      requestId,
+      'RESEND_COOLDOWN',
+      'Please wait before requesting another code.',
+      recent.created_at + cooldown - now
     )
   }
 
@@ -63,7 +74,7 @@ app.post('/challenges', async (c) => {
   const clientIp = c.req.header('CF-Connecting-IP') || 'unknown'
   const ipLimit = await takeRateLimit(c.env.DB, c.env.SESSION_SECRET, `ip:${clientIp}`, now, IP_LIMIT)
   if (!emailLimit || !ipLimit) {
-    return c.json({ error: { code: 'RATE_LIMITED', message: 'Too many code requests. Try again later.' } }, 429)
+    return challengeError(c, 429, requestId, 'RATE_LIMITED', 'Too many code requests. Try again later.')
   }
 
   const code = createCode()
@@ -92,11 +103,32 @@ app.post('/challenges', async (c) => {
     await c.env.DB.prepare('UPDATE auth_challenges SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL')
       .bind(now, challengeId).run()
     if (error instanceof EmailConfigurationError) {
-      return c.json({ error: { code: 'EMAIL_NOT_CONFIGURED', message: 'Email sign-in is not configured. Please contact Joblite support.' } }, 503)
+      console.warn(JSON.stringify({ event: 'auth_email_delivery_failed', request_id: requestId, reason: 'configuration_missing' }))
+      return challengeError(c, 503, requestId, 'EMAIL_NOT_CONFIGURED', 'Sign-in email is temporarily unavailable. Please try again later.', cooldown)
     }
-    // Provider response bodies can contain recipient or credential details; never log them.
-    console.error('passwordless email delivery failed')
-    return c.json({ error: { code: 'EMAIL_DELIVERY_FAILED', message: 'We could not deliver a sign-in code. Please retry shortly.', retry_after: cooldown } }, 502)
+    const deliveryError = error instanceof EmailDeliveryError ? error : null
+    const status = deliveryError?.kind === 'timeout'
+      ? 504
+      : deliveryError?.kind === 'provider_rate_limited' || deliveryError?.kind === 'provider_unavailable'
+        ? 503
+        : 502
+    const code = deliveryError?.kind === 'timeout'
+      ? 'EMAIL_DELIVERY_TIMEOUT'
+      : deliveryError?.kind === 'provider_rate_limited'
+        ? 'EMAIL_PROVIDER_BUSY'
+        : deliveryError?.kind === 'provider_unavailable'
+          ? 'EMAIL_PROVIDER_UNAVAILABLE'
+          : 'EMAIL_DELIVERY_FAILED'
+    console.warn(JSON.stringify({
+      event: 'auth_email_delivery_failed',
+      request_id: requestId,
+      reason: deliveryError?.kind || 'network_or_unexpected_failure',
+      ...(deliveryError?.providerStatus ? { provider_status: deliveryError.providerStatus } : {}),
+      ...(deliveryError?.providerErrorName ? { provider_error_name: deliveryError.providerErrorName } : {}),
+      ...(deliveryError?.providerDetail ? { provider_detail: deliveryError.providerDetail } : {}),
+      ...(getSenderDomain(c.env.EMAIL_FROM) ? { sender_domain: getSenderDomain(c.env.EMAIL_FROM) } : {}),
+    }))
+    return challengeError(c, status, requestId, code, 'We could not send a sign-in code. Please retry shortly.', cooldown)
   }
 
   return c.json({
@@ -268,24 +300,120 @@ async function takeRateLimit(
 
 class EmailConfigurationError extends Error {}
 
+type EmailDeliveryFailureKind =
+  | 'provider_auth'
+  | 'provider_rejected'
+  | 'provider_rate_limited'
+  | 'provider_unavailable'
+  | 'timeout'
+  | 'network'
+
+type ProviderErrorDetail =
+  | 'sender_domain_unverified'
+  | 'sender_not_authorized'
+  | 'recipient_restricted'
+  | 'api_key_or_account'
+  | 'other'
+
+class EmailDeliveryError extends Error {
+  constructor(
+    readonly kind: EmailDeliveryFailureKind,
+    readonly providerStatus?: number,
+    readonly providerErrorName?: string,
+    readonly providerDetail?: ProviderErrorDetail
+  ) {
+    super('Email delivery failed')
+  }
+}
+
+function getProviderErrorName(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const name = value.trim().toLowerCase()
+  return /^[a-z0-9_-]{1,48}$/.test(name) ? name : undefined
+}
+
+function getSenderDomain(value: string | undefined): string | undefined {
+  if (!value) return undefined
+  const address = value.match(/<([^<>]+)>/)?.[1] || value
+  return address.trim().match(/@([a-z0-9.-]+)\s*$/i)?.[1]?.toLowerCase()
+}
+
+function classifyProviderError(message: unknown): ProviderErrorDetail | undefined {
+  if (typeof message !== 'string') return undefined
+  const normalized = message.toLowerCase()
+  if (normalized.includes('domain') && /not verified|unverified/.test(normalized)) {
+    return 'sender_domain_unverified'
+  }
+  if (/(sender|from address|from field)/.test(normalized) && /not authorized|not allowed|invalid/.test(normalized)) {
+    return 'sender_not_authorized'
+  }
+  if (/(testing|test mode)/.test(normalized) && /(recipient|own email|only send)/.test(normalized)) {
+    return 'recipient_restricted'
+  }
+  if (/(api key|account|permission)/.test(normalized) && /(invalid|restricted|not authorized|permission)/.test(normalized)) {
+    return 'api_key_or_account'
+  }
+  return 'other'
+}
+
+function challengeError(
+  c: Context<AppContext>,
+  status: 400 | 429 | 502 | 503 | 504,
+  requestId: string,
+  code: string,
+  message: string,
+  retryAfter?: number
+) {
+  return c.json({
+    error: {
+      code,
+      message,
+      request_id: requestId,
+      ...(retryAfter ? { retry_after: retryAfter } : {}),
+    },
+  }, status)
+}
+
 async function deliverCode(env: AppContext['Bindings'], email: string, code: string): Promise<void> {
   const apiKey = env.EMAIL_API_KEY || env.RESEND_API_KEY
   if (!apiKey || !env.EMAIL_FROM) throw new EmailConfigurationError()
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 10_000)
   try {
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        from: env.EMAIL_FROM,
-        to: [email],
-        subject: 'Your Joblite sign-in code',
-        text: `Your Joblite sign-in code is ${code}. It expires in 10 minutes. If you did not request this code, you can ignore this email.`,
-      }),
-      signal: controller.signal,
-    })
-    if (!response.ok) throw new Error('email provider rejected message')
+    let response: Response
+    try {
+      response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from: env.EMAIL_FROM,
+          to: [email],
+          subject: 'Your Joblite sign-in code',
+          text: `Your Joblite sign-in code is ${code}. It expires in 10 minutes. If you did not request this code, you can ignore this email.`,
+        }),
+        signal: controller.signal,
+      })
+    } catch (error) {
+      throw new EmailDeliveryError(
+        controller.signal.aborted || (error instanceof Error && error.name === 'AbortError') ? 'timeout' : 'network'
+      )
+    }
+    if (!response.ok) {
+      const kind: EmailDeliveryFailureKind = response.status === 401 || response.status === 403
+        ? 'provider_auth'
+        : response.status === 429
+          ? 'provider_rate_limited'
+          : response.status >= 500
+            ? 'provider_unavailable'
+            : 'provider_rejected'
+      const providerError = await response.json().catch(() => null) as { name?: unknown; message?: unknown } | null
+      throw new EmailDeliveryError(
+        kind,
+        response.status,
+        getProviderErrorName(providerError?.name),
+        classifyProviderError(providerError?.message)
+      )
+    }
   } finally {
     clearTimeout(timeout)
   }

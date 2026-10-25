@@ -71,6 +71,10 @@ type SessionState = {
 
 const SessionContext = createContext<SessionState | undefined>(undefined)
 
+export function isExpectedUnauthenticatedSession(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 401
+}
+
 export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null)
   const [profile, setProfile] = useState<SessionProfile | null>(null)
@@ -91,7 +95,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setError(null)
     } catch (caught) {
       if (isAbortError(caught)) return
-      if (caught instanceof ApiError && caught.status === 401) {
+      if (isExpectedUnauthenticatedSession(caught)) {
         setUser(null)
         setProfile(null)
         setMemberships([])

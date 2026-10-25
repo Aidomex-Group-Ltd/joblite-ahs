@@ -57,8 +57,18 @@ run the same admin sync endpoint with their authenticated session. Optional Stre
 `RESEND_API_KEY` and `EMAIL_FROM` (the verified sender identity accepted by Resend). `EMAIL_API_KEY` is also accepted
 as a compatibility alias. The current Cloudflare Worker already has a binding named `RESEND_API_KEY`, so the supplied
 Resend credential is stored as the server-side `EMAIL_API_KEY` secret and `EMAIL_FROM` is configured as a secret.
+For local delivery, copy `.dev.vars.example` to `.dev.vars` and set the Resend key and verified sender; `.dev.vars`
+is ignored by git and is read by Wrangler, unlike Vite-prefixed browser environment variables. A named preview Worker
+is not configured in `wrangler.toml`; do not use `--env preview` until that Worker and its bindings/secrets have been
+created. Set secrets separately for each deployed Worker environment with `npx wrangler secret put <NAME>`.
 Missing delivery configuration returns an explicit error and never claims that an email was sent. Never put these
 values in Vite variables or frontend code.
+
+If code delivery fails, challenge creation returns an opaque request ID in both `X-Request-ID` and the JSON error.
+Worker logs record only this ID, a failure category, and (for provider HTTP errors) the provider status; they do not
+record recipients, codes, secrets, or provider response bodies. A Resend 401/403 points to credential or sender
+authorization configuration; a sender-domain verification issue is reported by Resend as a rejected request.
+Confirm the key is active and the exact `EMAIL_FROM` sender/domain is verified and permitted in the Resend account.
 
 ### Passwordless authentication
 

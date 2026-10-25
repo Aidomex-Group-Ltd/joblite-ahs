@@ -9,7 +9,10 @@ CSRF_SECRET=REPLACE_WITH_CSRF_SECRET
 # operations). Keep it server-side; never expose it to the frontend.
 INGEST_TOKEN=REPLACE_WITH_RANDOM_TOKEN
 
-# Optional: Stream and email configuration
+# Optional: Stream and email configuration. For local email delivery, use a
+# Resend API key and a sender identity whose domain is verified in Resend.
 # STREAM_ACCOUNT_ID=
 # STREAM_API_TOKEN=
-# EMAIL_API_KEY=
+# RESEND_API_KEY=
+# EMAIL_FROM="Joblite <noreply@your-verified-domain.example>"
+# EMAIL_API_KEY=  # Legacy alias; RESEND_API_KEY is preferred.

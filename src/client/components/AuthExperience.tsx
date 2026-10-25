@@ -113,7 +113,10 @@ function AuthDialog({ request, onClose }: { request: AuthRequest; onClose: () =>
     try {
       const response = await apiPost<{ challenge_id: string; resend_after: number }>('/auth/challenges', { email, ...await legalContext() })
       setChallenge(response.data.challenge_id); setResendIn(response.data.resend_after || 60); setStage('code')
-    } catch (cause) { if (cause instanceof ApiError && cause.retryAfter) setResendIn(cause.retryAfter); setError(errorMessage(cause)) } finally { setBusy(false) }
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.retryAfter) setResendIn(cause.retryAfter)
+      setError(cause instanceof ApiError && cause.requestId ? `${errorMessage(cause)} (Reference: ${cause.requestId})` : errorMessage(cause))
+    } finally { setBusy(false) }
   }
   async function verify(event: React.FormEvent) {
     event.preventDefault(); if (busy) return
@@ -148,7 +151,15 @@ function AuthDialog({ request, onClose }: { request: AuthRequest; onClose: () =>
     if (busy) return
     setBusy(true); setError('')
     try { const response = await apiPost<{ challenge_id: string; resend_after: number }>('/auth/challenges', { email, ...await legalContext() }); setChallenge(response.data.challenge_id); setResendIn(response.data.resend_after || 60); setCode('') }
-    catch (cause) { if (cause instanceof ApiError && cause.retryAfter) setResendIn(cause.retryAfter); setError(errorMessage(cause)) } finally { setBusy(false) }
+    catch (cause) {
+      if (cause instanceof ApiError && cause.retryAfter) setResendIn(cause.retryAfter)
+      if (!(cause instanceof ApiError && ['RESEND_COOLDOWN', 'RATE_LIMITED'].includes(cause.code))) {
+        setChallenge('')
+        setCode('')
+        setStage('email')
+      }
+      setError(cause instanceof ApiError && cause.requestId ? `${errorMessage(cause)} (Reference: ${cause.requestId})` : errorMessage(cause))
+    } finally { setBusy(false) }
   }
   const isCandidate = accountType === 'candidate' || accountType === 'both'
   const isEmployer = accountType === 'employer' || accountType === 'both'
@@ -182,7 +193,7 @@ function AuthDialog({ request, onClose }: { request: AuthRequest; onClose: () =>
             </fieldset>
             {isCandidate && <div className="jl-onboarding-fields"><label>Role or kind of work you’re looking for<input autoComplete="organization-title" required maxLength={120} value={desiredRole} onChange={(event) => setDesiredRole(event.target.value)} placeholder="e.g. Product designer" /></label><label>Experience level <span className="jl-onboarding-optional">Optional</span><select value={experienceLevel} onChange={(event) => setExperienceLevel(event.target.value)}><option value="">Choose if you’d like</option><option value="student">Student or recent graduate</option><option value="entry">Early career</option><option value="mid">Experienced</option><option value="senior">Senior or lead</option><option value="executive">Executive</option><option value="career_change">Changing careers</option><option value="not_sure">Not sure yet</option></select></label></div>}
             {isEmployer && <div className="jl-onboarding-fields"><label>Company or organization name<input autoComplete="organization" required maxLength={120} value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} placeholder="Organization name" /></label><label>Your role there<input autoComplete="organization-title" required maxLength={100} value={employerTitle} onChange={(event) => setEmployerTitle(event.target.value)} placeholder="e.g. Recruiter or Founder" /></label><small className="jl-onboarding-note">The workspace will be marked unverified until your organization is reviewed.</small></div>}
-            <div className="jl-auth-legal-checks"><label><input type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} /> I agree to the current <Link to="/legal/terms" target="_blank">Terms of Service</Link> (version {CURRENT_TERMS_VERSION}).</label><label><input type="checkbox" checked={ageConfirmed} onChange={(event) => setAgeConfirmed(event.target.checked)} /> I confirm that I am at least 18. Joblite does not currently offer a parent or guardian consent process.</label><label><input type="checkbox" checked={marketingConsent} onChange={(event) => setMarketingConsent(event.target.checked)} /> Email me optional Joblite product updates. This is optional and can be withdrawn later.</label><p><Link to="/legal/privacy" target="_blank">Privacy Notice</Link> explains processing. Marketing consent is not required to create an account.</p></div>
+            <div className="jl-auth-legal-checks"><label><input type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} /> By creating an account, you agree to Joblite’s <Link to="/legal/terms" target="_blank" rel="noopener noreferrer">Terms of Service</Link> and acknowledge its <Link to="/legal/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</Link>.</label><label><input type="checkbox" checked={ageConfirmed} onChange={(event) => setAgeConfirmed(event.target.checked)} /> I confirm that I am at least 18. Joblite does not currently offer a parent or guardian consent process.</label><label><input type="checkbox" checked={marketingConsent} onChange={(event) => setMarketingConsent(event.target.checked)} /> Email me optional Joblite product updates. This is optional and can be withdrawn later.</label></div>
           </div> : null}
           <button className="btn jl-auth-submit" disabled={busy || code.replace(/\s/g,'').length !== 6 || (termsRequired && (!termsAccepted || !ageConfirmed || !onboardingReady))}>{busy ? termsRequired ? 'Creating account…' : 'Verifying…' : termsRequired ? 'Create my account' : 'Verify and continue'}</button>
           <div className="jl-auth-links"><button type="button" onClick={() => { setStage('email'); setError('') }}>Change email</button><button type="button" disabled={busy || resendIn > 0} onClick={() => void resend()}>{resendIn > 0 ? `Resend in ${resendIn}s` : 'Resend code'}</button></div>

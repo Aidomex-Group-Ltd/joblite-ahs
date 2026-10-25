@@ -26,6 +26,11 @@ const EXPERIENCE_LEVELS = [
   { id: 'not_sure', label: 'Not sure yet' },
 ]
 
+function destinationAfterOnboarding(accountType: AccountType | '', nextTarget: string): string {
+  if (nextTarget !== '/' && nextTarget !== '/onboarding' && !nextTarget.startsWith('/onboarding?')) return nextTarget
+  return accountType === 'employer' ? '/hiring' : '/jobs'
+}
+
 export default function Onboarding() {
   const [params] = useSearchParams()
   const navigate = useNavigate()
@@ -95,8 +100,8 @@ export default function Onboarding() {
     apiGet<any>('/me/onboarding')
       .then(({ data }) => {
         if (data) {
-          if (data.status === 'completed' && !params.get('edit')) {
-            navigate(nextTarget, { replace: true })
+          if ((data.status === 'completed' || data.status === 'skipped') && !params.get('edit')) {
+            navigate(destinationAfterOnboarding(data.account_type || '', nextTarget), { replace: true })
             return
           }
           if (data.account_type) setAccountType(data.account_type)
@@ -267,7 +272,7 @@ export default function Onboarding() {
         notification_channels: [notificationChannel],
       })
       await session.refresh()
-      const destination = nextTarget !== '/' ? nextTarget : accountType === 'employer' ? '/hiring' : '/jobs'
+      const destination = destinationAfterOnboarding(accountType, nextTarget)
       navigate(destination, { replace: true })
     } catch (caught) {
       setError(errorMessage(caught))
@@ -283,7 +288,7 @@ export default function Onboarding() {
     try {
       await apiPut('/me/onboarding', { action: 'skip' })
       await session.refresh()
-      const destination = nextTarget !== '/' ? nextTarget : '/jobs'
+      const destination = destinationAfterOnboarding(accountType, nextTarget)
       navigate(destination, { replace: true })
     } catch (caught) {
       setError(errorMessage(caught))

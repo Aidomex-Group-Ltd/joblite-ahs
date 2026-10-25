@@ -13,7 +13,7 @@ Last updated: 2026-10-24
 
 **Verification:** `npm run e2e` passed 1 Playwright journey (guest feed/job filtering, private API denial, application auth sheet/dismissal, new-account email-code verification through the local mail sink, server-resolved external destination, no external click recorded as a submitted application, real local image upload/post publishing, media-viewer Escape/scroll restoration, and all requested page routes at 390px and 1440px). The run captured screenshots under `artifacts/screenshots/` and used a temporary D1 directory; no production mail was sent. Unit verification is tracked separately below.
 
-**Production email configuration:** configured the user-supplied Resend credential as the server-side `EMAIL_API_KEY` compatibility secret because the existing Worker already has a binding named `RESEND_API_KEY`; configured `EMAIL_FROM` as the sender secret. The sender is `noreply@joblite.online`. No test recipient was designated, so real delivery was not smoke-tested. The local E2E mail sink does not prove provider delivery.
+**Production email configuration:** configured the Resend credential as the server-side `RESEND_API_KEY` secret and `EMAIL_FROM` as the sender secret. The sender is `noreply@joblite.online`. A user-designated inbox confirmed receipt of a production sign-in code on 2026-10-26, although that challenge request returned HTTP 500 (`INTERNAL`). Delivery succeeded, but the challenge response/handoff was not verified; investigate the production Worker error before treating live signup as fully verified. The local E2E mail sink does not prove provider delivery.
 
 **Migration/deploy status:** migration `0005_passwordless_auth.sql` was applied to isolated E2E D1 and production D1. Production deployment completed on 2026-10-24 as Worker version `40e64667-6573-4da8-95b1-0d1ed55847a3`; homepage, all listed SPA routes, and `/api/health/ready` returned HTTP 200 in live checks.
 
@@ -118,7 +118,7 @@ Last updated: 2026-10-24
 - [ ] Accessibility audit
 - [ ] Load testing
 - [ ] Backup procedures
-- [ ] Production deployment
+- [x] Production deployment
 
 **Evidence:** Security measures implemented (auth, CSRF headers, validation).
 **Remaining dependencies:** Full hardening checklist.

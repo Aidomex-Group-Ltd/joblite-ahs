@@ -18,6 +18,12 @@ Worker/assets application; D1 binding DB; private R2 binding MEDIA; ingestion an
 
 Implementation must supply exact commands matching the chosen package versions, scripts and resource names. Avoid copying invented account/database IDs into deployment instructions.
 
+For local Wrangler development, copy `.dev.vars.example` to `.dev.vars` and configure `RESEND_API_KEY` plus `EMAIL_FROM`
+only when testing delivery to a controlled inbox. Wrangler reads `.dev.vars`; Vite/browser variables must never contain
+email credentials. For deployed Workers, set those as secrets on each environment. Resend requires an active API key
+and a sender address/domain verified and authorized in that Resend account. Do not send real test messages without an
+explicitly designated controlled recipient.
+
 ## Monitoring
 Structured request IDs; Worker error/latency/CPU; D1 query failures and volume; queue age/retries/dead letters; source freshness/rate limiting; upload failures; Stream processing failures; auth delivery and challenge abuse. Redact personal data. Expose liveness and limited readiness endpoints without secrets.
 

@@ -33,11 +33,20 @@ export default function SignUp() {
   const [challengeId, setChallengeId] = useState('')
   const [code, setCode] = useState('')
   const [resendIn, setResendIn] = useState(0)
+  const [cooldownEmail, setCooldownEmail] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
   const codeInputRef = useRef<HTMLInputElement>(null)
+  const activeResendIn = cooldownEmail === email.trim().toLowerCase() ? resendIn : 0
+
+  function displayError(caught: unknown): string {
+    const message = errorMessage(caught)
+    return caught instanceof ApiError && caught.requestId
+      ? `${message} (Reference: ${caught.requestId})`
+      : message
+  }
 
   useEffect(() => {
     if (session.user && !session.loading) {
@@ -96,13 +105,15 @@ export default function SignUp() {
       })
       setChallengeId(res.data.challenge_id)
       setResendIn(res.data.resend_after || 60)
+      setCooldownEmail(trimmedEmail)
       setStage('verify')
       setNotice(`We sent a 6-digit verification code to ${trimmedEmail}.`)
     } catch (caught) {
       if (caught instanceof ApiError && caught.retryAfter) {
         setResendIn(caught.retryAfter)
+        setCooldownEmail(trimmedEmail)
       }
-      setError(errorMessage(caught))
+      setError(displayError(caught))
     } finally {
       setBusy(false)
     }
@@ -135,7 +146,7 @@ export default function SignUp() {
       await session.refresh()
       navigate(`/onboarding?next=${encodeURIComponent(nextTarget)}`, { replace: true })
     } catch (caught) {
-      setError(errorMessage(caught))
+      setError(displayError(caught))
     } finally {
       setBusy(false)
     }
@@ -154,13 +165,21 @@ export default function SignUp() {
       })
       setChallengeId(res.data.challenge_id)
       setResendIn(res.data.resend_after || 60)
+      setCooldownEmail(email.trim().toLowerCase())
       setCode('')
       setNotice('A fresh verification code was sent to your email.')
     } catch (caught) {
+      const rateLimited = caught instanceof ApiError && ['RESEND_COOLDOWN', 'RATE_LIMITED'].includes(caught.code)
       if (caught instanceof ApiError && caught.retryAfter) {
         setResendIn(caught.retryAfter)
+        setCooldownEmail(email.trim().toLowerCase())
       }
-      setError(errorMessage(caught))
+      if (!rateLimited) {
+        setChallengeId('')
+        setCode('')
+        setStage('form')
+      }
+      setError(displayError(caught))
     } finally {
       setBusy(false)
     }
@@ -242,27 +261,6 @@ export default function SignUp() {
                   <input
                     type="checkbox"
                     required
-                    checked={termsAccepted}
-                    onChange={(e) => setTermsAccepted(e.target.checked)}
-                    disabled={busy}
-                  />
-                  <span>
-                    I agree to the applicable{' '}
-                    <Link to="/legal/terms" target="_blank" rel="noopener noreferrer">
-                      Terms of Service
-                    </Link>{' '}
-                    (version {CURRENT_TERMS_VERSION}) and acknowledge the{' '}
-                    <Link to="/legal/privacy" target="_blank" rel="noopener noreferrer">
-                      Privacy Notice
-                    </Link>
-                    .
-                  </span>
-                </label>
-
-                <label className="jl-consent-item">
-                  <input
-                    type="checkbox"
-                    required
                     checked={ageConfirmed}
                     onChange={(e) => setAgeConfirmed(e.target.checked)}
                     disabled={busy}
@@ -283,13 +281,34 @@ export default function SignUp() {
                 </label>
               </div>
 
+              <label className="jl-consent-item jl-signup-legal-notice">
+                <input
+                  type="checkbox"
+                  required
+                  checked={termsAccepted}
+                  onChange={(e) => setTermsAccepted(e.target.checked)}
+                  disabled={busy}
+                />
+                <span>
+                  By creating an account, you agree to Joblite’s{' '}
+                  <Link to="/legal/terms" target="_blank" rel="noopener noreferrer">
+                    Terms of Service
+                  </Link>{' '}
+                  and acknowledge its{' '}
+                  <Link to="/legal/privacy" target="_blank" rel="noopener noreferrer">
+                    Privacy Policy
+                  </Link>
+                  .
+                </span>
+              </label>
+
               <button
                 type="submit"
                 className="btn btn-primary jl-signup-submit-btn"
-                disabled={busy}
+                disabled={busy || activeResendIn > 0}
                 aria-busy={busy}
               >
-                {busy ? 'Creating account…' : 'Create account'}
+                {busy ? 'Sending code…' : activeResendIn > 0 ? `Try again in ${activeResendIn}s` : 'Create account'}
               </button>
 
               <div className="jl-signup-footer-actions">
@@ -354,10 +373,10 @@ export default function SignUp() {
                 <button
                   type="button"
                   className="btn-text"
-                  disabled={busy || resendIn > 0}
+                  disabled={busy || activeResendIn > 0}
                   onClick={() => void handleResend()}
                 >
-                  {resendIn > 0 ? `Resend code in ${resendIn}s` : 'Resend code'}
+                  {activeResendIn > 0 ? `Resend code in ${activeResendIn}s` : 'Resend code'}
                 </button>
               </div>
 

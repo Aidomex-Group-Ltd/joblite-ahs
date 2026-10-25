@@ -326,6 +326,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   color: var(--jl-navy);
   cursor: pointer;
 }
+.jl-signup-legal-notice {
+  margin: 0 0 16px;
+}
+.jl-signup-legal-notice a {
+  color: var(--jl-blue);
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .jl-consent-item input[type="checkbox"] {
   width: 18px;
   height: 18px;
@@ -690,4 +699,3 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     flex-direction: column;
   }
 }
-

@@ -1,5 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../src/client/lib/api'
+import { isExpectedUnauthenticatedSession } from '../src/client/lib/session'
 import { safeInternalPath } from '../src/client/components/AuthExperience'
+
+describe('session authentication response handling', () => {
+  it('treats an unauthenticated session probe as signed out but preserves other failures', () => {
+    expect(isExpectedUnauthenticatedSession(new ApiError(401, 'UNAUTHENTICATED', 'Authentication required'))).toBe(true)
+    expect(isExpectedUnauthenticatedSession(new ApiError(403, 'FORBIDDEN', 'Forbidden'))).toBe(false)
+    expect(isExpectedUnauthenticatedSession(new ApiError(500, 'INTERNAL', 'Unexpected failure'))).toBe(false)
+    expect(isExpectedUnauthenticatedSession(new Error('Network failure'))).toBe(false)
+  })
+})
 
 describe('safe internal authentication destinations', () => {
   afterEach(() => vi.unstubAllGlobals())
