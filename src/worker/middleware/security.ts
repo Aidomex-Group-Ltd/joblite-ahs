@@ -10,7 +10,7 @@ function configuredOrigin(c: Context<any>): string | null {
 
 /**
  * Rejects cross-site state-changing requests. Session cookies are already
- * SameSite=Strict; this is the second line of defence and also protects
+ * SameSite=Lax; this is the second line of defence and also protects
  * non-browser clients from being confused about accepted origins.
  */
 export async function sameOriginMutations(c: Context<any>, next: Next) {
@@ -48,7 +48,7 @@ export function sessionCookie(token: string, maxAgeSeconds: number, secure: bool
   const parts = [
     `joblite_session=${token}`,
     'HttpOnly',
-    'SameSite=Strict',
+    'SameSite=Lax',
     'Path=/',
     `Max-Age=${maxAgeSeconds}`,
   ]
@@ -57,7 +57,7 @@ export function sessionCookie(token: string, maxAgeSeconds: number, secure: bool
 }
 
 export function clearedSessionCookie(secure: boolean): string {
-  const parts = ['joblite_session=', 'HttpOnly', 'SameSite=Strict', 'Path=/', 'Max-Age=0']
+  const parts = ['joblite_session=', 'HttpOnly', 'SameSite=Lax', 'Path=/', 'Max-Age=0']
   if (secure) parts.push('Secure')
   return parts.join('; ')
 }

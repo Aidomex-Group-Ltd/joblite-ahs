@@ -16,3 +16,7 @@ INGEST_TOKEN=REPLACE_WITH_RANDOM_TOKEN
 # RESEND_API_KEY=
 # EMAIL_FROM="Joblite <noreply@your-verified-domain.example>"
 # EMAIL_API_KEY=  # Legacy alias; RESEND_API_KEY is preferred.
+
+# Optional DeepSeek support-chat inference. The model ID is not a credential.
+# DEEPSEEK_API_KEY=
+# DEEPSEEK_MODEL_ID=deepseek-chat

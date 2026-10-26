@@ -2,13 +2,18 @@ import { Hono } from 'hono'
 import type { AppContext } from '../types'
 
 const app = new Hono<AppContext>()
-const MODEL = '@cf/deepseek-ai/deepseek-v4.1-flash-1017'
+const DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions'
 const LIMIT = 12
 const WINDOW_SECONDS = 10 * 60
 const MAX_MESSAGES = 8
 const MAX_MESSAGE_LENGTH = 800
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string }
+
+app.use('*', async (c, next) => {
+  await next()
+  c.header('Cache-Control', 'private, no-store')
+})
 
 const SYSTEM_PROMPT = `You are Joblite's support assistant. Help users understand Joblite's public features and how to navigate them. Be warm, concise, and practical.
 
@@ -53,7 +58,13 @@ async function hashIdentity(ip: string, secret: string): Promise<string> {
 }
 
 app.post('/chat', async (c) => {
-  if (!c.env.AI) {
+  if (!c.env.DEEPSEEK_API_KEY || !c.env.DEEPSEEK_MODEL_ID) {
+    console.error(JSON.stringify({
+      event: 'support_chat_configuration_missing',
+      request_id: c.get('requestId'),
+      api_key_configured: Boolean(c.env.DEEPSEEK_API_KEY),
+      model_configured: Boolean(c.env.DEEPSEEK_MODEL_ID),
+    }))
     return c.json({ error: { code: 'SUPPORT_UNAVAILABLE', message: 'Support chat is temporarily unavailable.' } }, 503)
   }
 
@@ -105,19 +116,53 @@ app.post('/chat', async (c) => {
   }
 
   try {
-    const result = await c.env.AI.run(MODEL, {
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        ...messages,
-      ],
-      max_tokens: 320,
-      temperature: 0.3,
+    const response = await fetch(DEEPSEEK_API_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${c.env.DEEPSEEK_API_KEY}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        model: c.env.DEEPSEEK_MODEL_ID,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          ...messages,
+        ],
+        max_tokens: 320,
+        temperature: 0.3,
+        stream: false,
+      }),
+      signal: AbortSignal.timeout(20_000),
     })
-    const answer = typeof result.response === 'string' ? result.response.trim() : ''
-    if (!answer) throw new Error('Workers AI returned an empty response')
+    if (!response.ok) {
+      console.error(JSON.stringify({
+        event: 'support_chat_provider_rejected',
+        request_id: c.get('requestId'),
+        provider_status: response.status,
+      }))
+      return c.json({ error: { code: 'SUPPORT_UNAVAILABLE', message: 'Support chat could not answer right now. Please try again later.' } }, 503)
+    }
+    const result: unknown = await response.json()
+    const choices = result && typeof result === 'object' && 'choices' in result
+      ? (result as { choices?: unknown }).choices
+      : null
+    const firstChoice = Array.isArray(choices) ? choices[0] : null
+    const message = firstChoice && typeof firstChoice === 'object' && 'message' in firstChoice
+      ? (firstChoice as { message?: unknown }).message
+      : null
+    const content = message && typeof message === 'object' && 'content' in message
+      ? (message as { content?: unknown }).content
+      : null
+    const answer = typeof content === 'string' ? content.trim() : ''
+    if (!answer) throw new Error('DeepSeek returned an empty response')
     return c.json({ data: { answer } })
-  } catch {
-    console.error(JSON.stringify({ event: 'support_chat_inference_failed', request_id: c.get('requestId') }))
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: 'support_chat_inference_failed',
+      request_id: c.get('requestId'),
+      error_name: error instanceof Error ? error.name : 'UnknownError',
+    }))
     return c.json({ error: { code: 'SUPPORT_UNAVAILABLE', message: 'Support chat could not answer right now. Please try again later.' } }, 503)
   }
 })

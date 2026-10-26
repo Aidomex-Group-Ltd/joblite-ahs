@@ -100,7 +100,9 @@ function AuthDialog({ request, onClose }: { request: AuthRequest; onClose: () =>
   const intent = (validIntents.has(request.intent as Intent) ? request.intent : undefined) as Intent | undefined
   const copy = intent === 'apply-source' ? 'Sign in to continue to the original job posting.' : intent === 'publish-post' ? 'Sign in to publish your post. Your draft stays on this device.' : intent === 'save' ? 'Sign in to save this opportunity to your account.' : 'Continue with email to access your Joblite account.'
 
-  useEffect(() => { dialog.current?.querySelector<HTMLElement>('input,button,a')?.focus() }, [])
+  useEffect(() => {
+    dialog.current?.querySelector<HTMLElement>('input:not([type="hidden"]), select, textarea')?.focus()
+  }, [])
   useEffect(() => {
     if (!termsRequired || countries.length) return
     apiGet<Array<{ code: string; name: string }>>('/countries').then(({ data }) => setCountries(data || [])).catch(() => setCountries([]))
@@ -273,7 +275,11 @@ export function SignInPage() {
   const intent = params.get('intent') || undefined
   const jobId = params.get('jobId') || undefined
   const nextPath = safeInternalPath(params.get('next'))
-  useEffect(() => { if (!session.user) openAuth({ intent, jobId, nextPath }); else navigate(nextPath, { replace: true }) }, [])
+  useEffect(() => {
+    if (session.loading) return
+    if (!session.user) openAuth({ intent, jobId, nextPath })
+    else navigate(nextPath, { replace: true })
+  }, [session.loading, session.user, openAuth, navigate, intent, jobId, nextPath])
   return (
     <main className="page">
       <div className="card state-card">

@@ -46,7 +46,7 @@ describe('passwordless email authentication', () => {
     expect(verified.headers.get('Cache-Control')).toBe('no-store')
     const cookie = verified.headers.get('set-cookie') || ''
     expect(cookie).toContain('HttpOnly')
-    expect(cookie).toContain('SameSite=Strict')
+    expect(cookie).toContain('SameSite=Lax')
     expect(cookie).toContain('Secure')
     expect(cookie).toContain('Path=/')
     expect(cookie).toContain('Max-Age=604800')
@@ -86,6 +86,7 @@ describe('passwordless email authentication', () => {
     expect(logout.status).toBe(200)
     const clearedCookie = logout.headers.get('set-cookie') || ''
     expect(clearedCookie).toContain('Max-Age=0')
+    expect(clearedCookie).toContain('SameSite=Lax')
     expect(clearedCookie).toContain('Secure')
     expect((await api(env)('/me', { headers: { Cookie: cookie! } })).status).toBe(401)
 

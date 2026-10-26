@@ -1,6 +1,5 @@
 export type Env = {
   DB: D1Database
-  AI?: Ai
   MEDIA: R2Bucket
   ASSETS?: Fetcher
   OUTBOX_QUEUE: Queue
@@ -16,6 +15,8 @@ export type Env = {
   EMAIL_API_KEY?: string
   RESEND_API_KEY?: string
   EMAIL_FROM?: string
+  DEEPSEEK_API_KEY?: string
+  DEEPSEEK_MODEL_ID?: string
   AUTH_RESEND_COOLDOWN_SECONDS?: string
   TEST_MAIL_SINK?: string
 }

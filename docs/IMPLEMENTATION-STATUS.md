@@ -25,10 +25,19 @@ Each row records the requirement, UI/API location, verification evidence, and re
 | Reports derive from persisted events with UTC filters, repeat-stage/missing/out-of-order handling, and documented definitions | UI `/hiring`; API `GET /organizations/:id/reports` | `tests/ats.test.ts` report authorization and edge-case tests | Empty samples display as unavailable rather than zero |
 | CSV exports are authorized, omit private review data, and neutralize spreadsheet formulas | UI `/hiring`; API `GET /organizations/:id/applications/export.csv` | `tests/ats.test.ts` export-role/formula/private-field cases | Export capped at 5,000 records |
 | Feed body/comments/job previews are 1rem; metadata remains readable; inputs, wrapping, contrast, and mobile zoom are accessible | UI feed/job detail; `index.css`, `JobliteHome.css`, `FeedReadability.css` | Playwright computed-style, contrast, URL-wrap, mobile, and 200%-zoom checks in `e2e/feed-media.spec.ts`; production health endpoints returned HTTP 200 | Live visual/computed-style checks were not run against production |
-| Support chatbot uses the requested DeepSeek Workers AI model with a support-only, no-tools prompt | Global UI widget; `POST /api/v1/support/chat`; M 0011; `[ai]` binding | `tests/support-chat.test.ts`, `e2e/support-chat.spec.ts` | Production Workers AI paid-plan entitlement must be confirmed by a live inference request |
+| Support chatbot uses the configured DeepSeek API credentials with a support-only, no-tools prompt | Global UI widget; `POST /api/v1/support/chat`; M 0011; Worker-side `DEEPSEEK_API_KEY` and `DEEPSEEK_MODEL_ID` secrets | `tests/support-chat.test.ts`, `e2e/support-chat.spec.ts`; production request reached DeepSeek, which returned HTTP 402 | Provider account/payment status must be resolved before live chat can answer |
 | Migration/recovery readiness | `wrangler.toml`; M 0010–0012 | Additive SQL reviewed; pre-migration Time Travel bookmark `0000025b-00000002-00005110-0a2d63952ee1ee4db9cfb4b56c45d41d` recorded at `2026-10-26T15:22:05Z`; Wrangler captured its migration backup; remote list confirms no pending migrations | Restore procedure was not exercised |
 
 **ATS release (2026-10-26):** Production D1 migrations `0010_ats_workflows.sql`, `0011_support_chat_rate_limits.sql`, and `0012_ats_job_applications.sql` applied. Worker version `558b111a-8e68-4404-930c-98105b0b2270` deployed to `joblite.online`; `/`, `/api/health`, and `/api/health/ready` returned HTTP 200.
+
+## Mobile authentication and DeepSeek support follow-up (2026-10-26)
+- [x] Kept public job discovery available while verifying ATS application and organization endpoints remain authentication-protected.
+- [x] Changed the session cookie to `SameSite=Lax` and delayed sign-in routing until the existing-session probe completes; focused the mobile sign-in sheet on the email field.
+- [x] Replaced Workers AI inference with a server-side DeepSeek chat-completions request using the configured Worker secrets; provider errors and chat responses are not cached or exposed to the browser.
+
+**Verification:** `npm run typecheck`, `npm run lint`, `npm test` (81 tests), and the targeted mobile-auth/support-chat Playwright suites passed. Mobile email-code verification established a session and returned HTTP 200 from `/api/v1/me`. No production verification email was sent; production `/api/v1/me` without a session returned the expected HTTP 401. After deployment, `/`, `/api/health`, and `/api/health/ready` returned HTTP 200. The anonymous production chat reached DeepSeek, which returned HTTP 402; the Worker correctly returned a generic HTTP 503. The configured secret names were confirmed without reading their values.
+
+**Release:** Worker version `6a1a7beb-bdb0-4faf-80f2-898e9b549b92` deployed to `joblite.online`. Live chat remains unavailable until the DeepSeek account-side 402 response is resolved.
 
 ## Signup challenge handoff follow-up (2026-10-26)
 - [x] Reduced signup account creation to the required Terms of Service / Privacy Policy acknowledgment; age and marketing controls are no longer separate required signup checkboxes.

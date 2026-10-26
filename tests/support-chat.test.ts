@@ -7,15 +7,19 @@ import { createTestEnv } from './helpers/d1'
 describe('AI support chat', () => {
   let env: Env
   let close: () => void
-  let runModel: ReturnType<typeof vi.fn>
+  let providerFetch: ReturnType<typeof vi.fn>
   let request: (body: unknown, ip?: string) => Promise<Response>
 
   beforeEach(() => {
     const test = createTestEnv()
     env = test.env
     close = test.close
-    runModel = vi.fn(async (_model: string, _input: unknown) => ({ response: 'You can track native applications under My Applications.' }))
-    env.AI = { run: runModel } as unknown as Ai
+    env.DEEPSEEK_API_KEY = 'test-deepseek-key'
+    env.DEEPSEEK_MODEL_ID = 'deepseek-chat'
+    providerFetch = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: 'You can track native applications under My Applications.' } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', providerFetch)
     const router = new Hono()
     router.route('/api/v1/support', support)
     request = async (body, ip = '203.0.113.8') => await router.request('/api/v1/support/chat', {
@@ -27,15 +31,19 @@ describe('AI support chat', () => {
 
   afterEach(() => close())
 
-  it('uses the configured model with support-only instructions and does not persist chat text', async () => {
+  it('uses configured DeepSeek credentials and support-only instructions without persisting chat text', async () => {
     const response = await request({ messages: [{ role: 'user', content: 'How do I track my application?' }] })
     expect(response.status).toBe(200)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(await response.json()).toEqual({
       data: { answer: 'You can track native applications under My Applications.' },
     })
-    expect(runModel).toHaveBeenCalledOnce()
-    expect(runModel.mock.calls[0][0]).toBe('@cf/deepseek-ai/deepseek-v4.1-flash-1017')
-    const modelInput = runModel.mock.calls[0][1] as { messages: Array<{ role: string; content: string }>; max_tokens: number }
+    expect(providerFetch).toHaveBeenCalledOnce()
+    const [url, init] = providerFetch.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://api.deepseek.com/chat/completions')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer test-deepseek-key')
+    const modelInput = JSON.parse(String(init.body)) as { model: string; messages: Array<{ role: string; content: string }>; max_tokens: number }
+    expect(modelInput.model).toBe('deepseek-chat')
     expect(modelInput.messages[0].role).toBe('system')
     expect(modelInput.messages[0].content).toContain('cannot inspect accounts')
     expect(modelInput.messages[1]).toEqual({ role: 'user', content: 'How do I track my application?' })
@@ -54,7 +62,7 @@ describe('AI support chat', () => {
       { role: 'user', content: 'Second' },
     ] })
     expect(repeated.status).toBe(400)
-    expect(runModel).not.toHaveBeenCalled()
+    expect(providerFetch).not.toHaveBeenCalled()
   })
 
   it('limits repeated requests per hashed address and reports the retry delay', async () => {
@@ -64,15 +72,24 @@ describe('AI support chat', () => {
     const limited = await request({ messages: [{ role: 'user', content: 'One more' }] })
     expect(limited.status).toBe(429)
     expect(Number(limited.headers.get('Retry-After'))).toBeGreaterThan(0)
-    expect(runModel).toHaveBeenCalledTimes(12)
+    expect(providerFetch).toHaveBeenCalledTimes(12)
   })
 
-  it('returns an honest unavailable response when model inference fails', async () => {
-    runModel.mockRejectedValueOnce(new Error('provider unavailable'))
+  it('returns an honest unavailable response without exposing provider errors', async () => {
+    providerFetch.mockResolvedValueOnce(new Response('provider error details', { status: 401 }))
     const response = await request({ messages: [{ role: 'user', content: 'Help' }] })
     expect(response.status).toBe(503)
-    expect(await response.json()).toMatchObject({
+    const payload = await response.json()
+    expect(payload).toMatchObject({
       error: { code: 'SUPPORT_UNAVAILABLE' },
     })
+    expect(JSON.stringify(payload)).not.toContain('provider error details')
+  })
+
+  it('fails closed if either DeepSeek credential is missing', async () => {
+    env.DEEPSEEK_API_KEY = undefined
+    const response = await request({ messages: [{ role: 'user', content: 'Help' }] })
+    expect(response.status).toBe(503)
+    expect(providerFetch).not.toHaveBeenCalled()
   })
 })

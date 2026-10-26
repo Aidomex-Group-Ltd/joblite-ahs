@@ -80,7 +80,7 @@ describe('complete signup and resumable onboarding flow', () => {
     const setCookie = verifyRes.headers.get('set-cookie') || ''
     expect(setCookie).toContain('joblite_session=')
     expect(setCookie).toContain('HttpOnly')
-    expect(setCookie).toContain('SameSite=Strict')
+    expect(setCookie).toContain('SameSite=Lax')
 
     // Verify user created
     const user = await db

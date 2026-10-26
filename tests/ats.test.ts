@@ -59,11 +59,22 @@ describe('ATS workflows', () => {
     router.route('/api/v1/media', media)
     request = async (path, userId, init = {}) => await router.request(path, {
       ...init,
-      headers: { Cookie: `joblite_session=${tokens[userId]}`, ...(init.headers || {}) },
+      headers: {
+        ...(tokens[userId] ? { Cookie: `joblite_session=${tokens[userId]}` } : {}),
+        ...(init.headers || {}),
+      },
     }, env as any)
   })
 
   afterEach(() => close())
+
+  it('keeps ATS records private while public discovery stays available to guests', async () => {
+    await createApplication('guest-private-app')
+    expect((await request('/api/v1/applications/guest-private-app', '')).status).toBe(401)
+    expect((await request('/api/v1/organizations/ats-org/overview', '')).status).toBe(401)
+    expect((await request('/api/v1/organizations/ats-org/applications', '')).status).toBe(401)
+    expect((await request('/api/v1/jobs?limit=1', '')).status).toBe(200)
+  })
 
   async function createApplication(id: string, options: { cvMediaId?: string } = {}) {
     await env.DB.prepare(
