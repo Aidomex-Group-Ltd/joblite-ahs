@@ -22,7 +22,8 @@
 }
 
 html {
-  font-size: 16px;
+  /* 100% keeps the browser's 16px default while respecting user font preferences. */
+  font-size: 100%;
 }
 
 body {
@@ -31,7 +32,7 @@ body {
     sans-serif;
   background: var(--bg-primary);
   color: var(--navy);
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -48,7 +49,7 @@ a:hover {
 
 button {
   font-family: inherit;
-  font-size: 15px;
+  font-size: 1rem;
   cursor: pointer;
   min-height: 44px;
 }
@@ -71,7 +72,7 @@ button {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  font-size: 15px;
+  font-size: 1rem;
   transition: background 0.15s ease;
 }
 
@@ -101,7 +102,7 @@ button {
   border: 1px solid var(--border-color);
   border-radius: 9999px;
   font-family: inherit;
-  font-size: 15px;
+  font-size: 1rem;
   min-height: 44px;
   background: var(--bg-primary);
   color: var(--navy);
@@ -144,7 +145,7 @@ button {
   font-weight: 500;
   position: relative;
   min-height: 44px;
-  font-size: 15px;
+  font-size: 1rem;
 }
 
 .tab-btn.active {
@@ -198,13 +199,13 @@ button {
 }
 
 .source-label {
-  font-size: 12px;
+  font-size: 0.875rem;
   color: #687798;
 }
 
 .external-apply-note {
   margin: 10px 0 0;
-  font-size: 12px;
+  font-size: 0.875rem;
   line-height: 1.5;
   color: #687798;
 }
@@ -214,7 +215,7 @@ button {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  font-size: 12px;
+  font-size: 0.875rem;
   color: #687798;
   margin-top: 10px;
 }
@@ -234,7 +235,7 @@ button {
 
 .post-body {
   margin: 10px 0;
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

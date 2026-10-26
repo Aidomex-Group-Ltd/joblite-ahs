@@ -12,13 +12,25 @@ type Row = Record<string, any>
 const JOB_SELECT = `SELECT j.id, j.origin, j.title, j.body, j.employment_type, j.workplace_arrangement,
   j.application_method, j.status, j.published_at, j.discovered_at, j.checked_at, j.last_seen_at, j.last_fetched_at,
   j.expires_at, j.deadline, j.canonical_url, j.application_url, j.location_text, j.salary_text,
-  j.provider_updated_at, j.organization_id, j.source_id, j.company_name,
+  j.provider_updated_at, j.organization_id, j.source_id, j.company_name, j.application_questions_json, j.archived_at,
   o.name as org_name, o.slug as org_slug, s.name as source_name, s.attribution_text as source_attribution,
   je.mode as eligibility_mode, je.evidence as eligibility_evidence
   FROM jobs j
   LEFT JOIN organizations o ON o.id = j.organization_id
   LEFT JOIN sources s ON s.id = j.source_id
   LEFT JOIN job_eligibility je ON je.job_id = j.id`
+
+function parseApplicationQuestions(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length > 5) return null
+  const questions: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string' || !item.trim() || item.trim().length > 240) return null
+    const question = item.trim()
+    if (questions.includes(question)) return null
+    questions.push(question)
+  }
+  return questions
+}
 
 async function attachJobDetails(c: any, jobs: Row[], userId?: string) {
   if (jobs.length === 0) return jobs
@@ -257,10 +269,26 @@ app.post('/', requireAuth, async (c) => {
   const organizationId = typeof body.organization_id === 'string' ? body.organization_id : ''
   const title = typeof body.title === 'string' ? body.title.trim() : ''
   const description = typeof body.body === 'string' ? body.body.trim() : ''
+  const questions = body.application_questions === undefined ? [] : parseApplicationQuestions(body.application_questions)
   const errors: Record<string, string> = {}
   if (!organizationId) errors.organization_id = 'Organization is required'
-  if (title.length < 3) errors.title = 'Title must be at least 3 characters'
-  if (description.length < 20) errors.body = 'Description must be at least 20 characters'
+  if (title.length < 3 || title.length > 160) errors.title = 'Title must be between 3 and 160 characters'
+  if (description.length < 20 || description.length > 20000) errors.body = 'Description must be between 20 and 20,000 characters'
+  if (questions === null) errors.application_questions = 'Use up to five distinct questions, each 240 characters or fewer'
+  const employmentType = body.employment_type === undefined || body.employment_type === null || body.employment_type === ''
+    ? null
+    : typeof body.employment_type === 'string' ? body.employment_type.trim() : null
+  if (body.employment_type !== undefined && body.employment_type !== null &&
+      (typeof body.employment_type !== 'string' || body.employment_type.trim().length > 100)) {
+    errors.employment_type = 'Employment type must be text up to 100 characters'
+  }
+  const workplaceArrangement = body.workplace_arrangement === undefined || body.workplace_arrangement === null || body.workplace_arrangement === ''
+    ? null
+    : typeof body.workplace_arrangement === 'string' ? body.workplace_arrangement : ''
+  if (body.workplace_arrangement !== undefined && body.workplace_arrangement !== null &&
+      (typeof body.workplace_arrangement !== 'string' || !['', 'remote', 'hybrid', 'onsite'].includes(workplaceArrangement || ''))) {
+    errors.workplace_arrangement = 'Choose remote, hybrid, onsite, or leave it unspecified'
+  }
   if (Object.keys(errors).length > 0) {
     return c.json({ error: { code: 'INVALID', message: 'Please correct the highlighted fields', fields: errors } }, 400)
   }
@@ -277,39 +305,60 @@ app.post('/', requireAuth, async (c) => {
 
   const jobId = nanoid()
   const now = Math.floor(Date.now() / 1000)
-  await c.env.DB.prepare(
-    `INSERT INTO jobs (id, origin, organization_id, title, body, employment_type, workplace_arrangement, application_method, status, version, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
-  )
-    .bind(
+  const countryCodes: string[] = Array.isArray(body.country_codes)
+    ? [...new Set<string>(body.country_codes.map((code: unknown) => typeof code === 'string' ? code.toUpperCase() : ''))]
+    : []
+  if (countryCodes.length > 250 || countryCodes.some((code) => !/^[A-Z]{2}$/.test(code))) {
+    return c.json({ error: { code: 'INVALID', message: 'Provide valid ISO country codes' } }, 400)
+  }
+  const eligibilityMode = typeof body.eligibility_mode === 'string' ? body.eligibility_mode : null
+  if (body.eligibility_mode !== undefined &&
+      (!eligibilityMode || !['worldwide', 'countries', 'unknown'].includes(eligibilityMode))) {
+    return c.json({ error: { code: 'INVALID', message: 'Choose worldwide, countries, or unknown eligibility' } }, 400)
+  }
+  const foundCountries = countryCodes.length
+    ? await c.env.DB.prepare(`SELECT code FROM countries WHERE code IN (${countryCodes.map(() => '?').join(',')})`)
+      .bind(...countryCodes).all<{ code: string }>()
+    : { results: [] }
+  if (foundCountries.results.length !== countryCodes.length) {
+    return c.json({ error: { code: 'INVALID', message: 'One or more country codes are not in the country directory' } }, 400)
+  }
+  const statements = [
+    c.env.DB.prepare(
+      `INSERT INTO jobs (id, origin, organization_id, title, body, employment_type, workplace_arrangement, application_method, status, version, application_questions_json, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(
       jobId,
       'native',
       organizationId,
       title,
       description,
-      typeof body.employment_type === 'string' ? body.employment_type : null,
-      typeof body.workplace_arrangement === 'string' ? body.workplace_arrangement : null,
+      employmentType,
+      workplaceArrangement,
       'native',
       'draft',
       1,
+      JSON.stringify(questions),
       now,
       now
-    )
-    .run()
-
-  if (body.eligibility_mode) {
-    await c.env.DB.prepare('INSERT INTO job_eligibility (id, job_id, mode, evidence) VALUES (?,?,?,?)')
-      .bind(nanoid(), jobId, body.eligibility_mode, body.eligibility_evidence || null)
-      .run()
+    ),
+  ]
+  if (eligibilityMode) {
+    statements.push(c.env.DB.prepare('INSERT INTO job_eligibility (id, job_id, mode, evidence) VALUES (?,?,?,?)')
+      .bind(nanoid(), jobId, eligibilityMode, typeof body.eligibility_evidence === 'string' ? body.eligibility_evidence.slice(0, 1000) : null))
   }
-  if (Array.isArray(body.country_codes)) {
-    for (const code of body.country_codes) {
-      if (typeof code !== 'string') continue
-      await c.env.DB.prepare('INSERT OR IGNORE INTO job_eligible_countries (job_id, country_code) VALUES (?,?)')
-        .bind(jobId, code.toUpperCase())
-        .run()
-    }
+  if (countryCodes.length) {
+    const countryValues: unknown[] = []
+    for (const code of countryCodes) countryValues.push(jobId, code)
+    statements.push(c.env.DB.prepare(
+      `INSERT INTO job_eligible_countries (job_id, country_code) VALUES ${countryCodes.map(() => '(?,?)').join(',')}`
+    ).bind(...countryValues))
   }
+  statements.push(c.env.DB.prepare(
+    `INSERT INTO audit_events (id, actor_id, organization_id, action, target_type, target_id, metadata_json, created_at)
+     SELECT ?, ?, ?, 'job.created', 'job', ?, '{"status":"draft"}', ? WHERE EXISTS (SELECT 1 FROM jobs WHERE id = ?)`
+  ).bind(nanoid(), user.id, organizationId, jobId, now, jobId))
+  await c.env.DB.batch(statements)
 
   return c.json({ data: { id: jobId, status: 'draft' } }, 201)
 })
@@ -328,22 +377,51 @@ app.patch('/:id', requireAuth, async (c) => {
   if (!membership || !['owner', 'admin', 'recruiter'].includes(membership.role)) {
     return c.json({ error: { code: 'FORBIDDEN', message: 'Not authorized' } }, 403)
   }
-  if (body.expected_version !== undefined && Number(body.expected_version) !== job.version) {
+  if (job.archived_at) return c.json({ error: { code: 'ARCHIVED', message: 'Archived jobs cannot be edited' } }, 409)
+  if (!Number.isInteger(body.expected_version) || body.expected_version !== job.version) {
     return c.json({ error: { code: 'CONFLICT', message: 'This job changed since it was loaded. Refresh and retry.' } }, 409)
   }
 
+  const allowedFields = new Set(['expected_version', 'title', 'body', 'employment_type', 'workplace_arrangement', 'application_questions'])
+  if (Object.keys(body).some((key) => !allowedFields.has(key))) {
+    return c.json({ error: { code: 'INVALID', message: 'Only supported job fields can be edited' } }, 400)
+  }
   const fields: string[] = []
   const values: unknown[] = []
-  for (const key of ['title', 'body', 'employment_type', 'workplace_arrangement']) {
-    if (typeof body[key] === 'string' && body[key].trim().length > 0) {
+  const editableStrings = ['title', 'body', 'employment_type', 'workplace_arrangement'] as const
+  for (const key of editableStrings) {
+    if (body[key] !== undefined) {
+      if (typeof body[key] !== 'string') return c.json({ error: { code: 'INVALID', message: `${key} must be text` } }, 400)
+      const value = body[key].trim()
+      if ((key === 'title' && (value.length < 3 || value.length > 160)) ||
+          (key === 'body' && (value.length < 20 || value.length > 20000)) ||
+          (key === 'employment_type' && value.length > 100) ||
+          (key === 'workplace_arrangement' && value !== '' && !['remote', 'hybrid', 'onsite'].includes(value))) {
+        return c.json({ error: { code: 'INVALID', message: `${key} is not valid` } }, 400)
+      }
       fields.push(`${key} = ?`)
-      values.push(body[key].trim())
+      values.push(value || (key === 'employment_type' || key === 'workplace_arrangement' ? null : ''))
     }
   }
-  if (fields.length === 0) return c.json({ data: { id, version: job.version } })
+  if (body.application_questions !== undefined) {
+    const questions = parseApplicationQuestions(body.application_questions)
+    if (!questions) return c.json({ error: { code: 'INVALID', message: 'Use up to five distinct questions, each 240 characters or fewer' } }, 400)
+    fields.push('application_questions_json = ?')
+    values.push(JSON.stringify(questions))
+  }
+  if (fields.length === 0) return c.json({ error: { code: 'INVALID', message: 'Provide at least one job field to update' } }, 400)
+  const now = Math.floor(Date.now() / 1000)
+  const auditId = nanoid()
   fields.push('version = version + 1', 'updated_at = ?')
-  values.push(Math.floor(Date.now() / 1000), id)
-  await c.env.DB.prepare(`UPDATE jobs SET ${fields.join(', ')} WHERE id = ?`).bind(...values).run()
+  values.push(now, id, job.version)
+  const results = await c.env.DB.batch([
+    c.env.DB.prepare(`UPDATE jobs SET ${fields.join(', ')} WHERE id = ? AND version = ? AND archived_at IS NULL`).bind(...values),
+    c.env.DB.prepare(
+      `INSERT INTO audit_events (id, actor_id, organization_id, action, target_type, target_id, metadata_json, created_at)
+       SELECT ?, ?, ?, 'job.updated', 'job', ?, ?, ? WHERE changes() = 1`
+    ).bind(auditId, user.id, job.organization_id, id, JSON.stringify({ fields: Object.keys(body).filter((key) => key !== 'expected_version') }), now),
+  ])
+  if ((results[0] as any)?.meta?.changes !== 1) return c.json({ error: { code: 'CONFLICT', message: 'This job changed; refresh and retry.' } }, 409)
   return c.json({ data: { id, version: job.version + 1 } })
 })
 
@@ -352,6 +430,10 @@ app.post('/:id/publish', requireAuth, async (c) => {
   const id = c.req.param('id')
   const job = await c.env.DB.prepare('SELECT * FROM jobs WHERE id = ?').bind(id).first<any>()
   if (!job) return c.json({ error: { code: 'NOT_FOUND', message: 'Job not found' } }, 404)
+  if (job.archived_at) return c.json({ error: { code: 'ARCHIVED', message: 'Archived jobs cannot be published' } }, 409)
+  if (job.status === 'closed') {
+    return c.json({ error: { code: 'REOPEN_CONFIRMATION_REQUIRED', message: 'Reopen this job with an explicit reason before publishing it again' } }, 409)
+  }
   if (job.origin !== 'native' || job.application_method !== 'native') {
     return c.json({ error: { code: 'INVALID', message: 'Only native jobs can be published via this endpoint' } }, 400)
   }
@@ -363,21 +445,34 @@ app.post('/:id/publish', requireAuth, async (c) => {
     return c.json({ error: { code: 'FORBIDDEN', message: 'Not authorized' } }, 403)
   }
 
+  const body = await c.req.json().catch(() => ({}))
+  if (!Number.isInteger(body.expected_version) || body.expected_version !== job.version) {
+    return c.json({ error: { code: 'CONFLICT', message: 'This job changed; refresh and retry.' } }, 409)
+  }
   const now = Math.floor(Date.now() / 1000)
-  await c.env.DB.prepare('UPDATE jobs SET status = ?, published_at = COALESCE(published_at, ?), updated_at = ?, version = version + 1 WHERE id = ?')
-    .bind('published', now, now, id)
-    .run()
-  await c.env.DB.prepare(
-    "INSERT INTO outbox (id, event_id, event_type, payload_json, state, created_at) VALUES (?,?,?,?,'pending',?)"
-  )
-    .bind(nanoid(), nanoid(), 'job.published', JSON.stringify({ job_id: id, organization_id: job.organization_id }), now)
-    .run()
+  const auditId = nanoid()
+  const eventId = nanoid()
+  const results = await c.env.DB.batch([
+    c.env.DB.prepare(
+      "UPDATE jobs SET status = 'published', published_at = COALESCE(published_at, ?), updated_at = ?, version = version + 1 WHERE id = ? AND version = ? AND archived_at IS NULL"
+    ).bind(now, now, id, job.version),
+    c.env.DB.prepare(
+      `INSERT INTO audit_events (id, actor_id, organization_id, action, target_type, target_id, metadata_json, created_at)
+       SELECT ?, ?, ?, 'job.published', 'job', ?, ?, ? WHERE changes() = 1`
+    ).bind(auditId, user.id, job.organization_id, id, JSON.stringify({ version: job.version + 1 }), now),
+    c.env.DB.prepare(
+      `INSERT INTO outbox (id, event_id, event_type, payload_json, state, created_at)
+       SELECT ?, ?, 'job.published', ?, 'pending', ? WHERE EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`
+    ).bind(nanoid(), eventId, JSON.stringify({ job_id: id, organization_id: job.organization_id }), now, auditId),
+  ])
+  if ((results[0] as any)?.meta?.changes !== 1) return c.json({ error: { code: 'CONFLICT', message: 'This job changed; refresh and retry.' } }, 409)
   return c.json({ data: { id, status: 'published', published_at: now } })
 })
 
 app.post('/:id/close', requireAuth, async (c) => {
   const user = c.get('user')!
   const id = c.req.param('id')
+  const body = await c.req.json().catch(() => ({}))
   const job = await c.env.DB.prepare('SELECT * FROM jobs WHERE id = ?').bind(id).first<any>()
   if (!job) return c.json({ error: { code: 'NOT_FOUND', message: 'Job not found' } }, 404)
   const membership = await c.env.DB.prepare('SELECT role FROM memberships WHERE organization_id = ? AND user_id = ?')
@@ -386,10 +481,121 @@ app.post('/:id/close', requireAuth, async (c) => {
   if (!membership || !['owner', 'admin', 'recruiter'].includes(membership.role)) {
     return c.json({ error: { code: 'FORBIDDEN', message: 'Not authorized' } }, 403)
   }
-  await c.env.DB.prepare("UPDATE jobs SET status = 'closed', updated_at = ?, version = version + 1 WHERE id = ?")
-    .bind(Math.floor(Date.now() / 1000), id)
-    .run()
+  if (job.status === 'closed') return c.json({ data: { id, status: 'closed', version: job.version } })
+  const now = Math.floor(Date.now() / 1000)
+  const auditId = nanoid()
+  const expectedVersion = Number.isInteger(body.expected_version) ? body.expected_version : null
+  if (expectedVersion !== null && expectedVersion !== job.version) {
+    return c.json({ error: { code: 'CONFLICT', message: 'This job changed; refresh and retry.' } }, 409)
+  }
+  const results = await c.env.DB.batch([
+    c.env.DB.prepare(
+      `UPDATE jobs SET status = 'closed', updated_at = ?, version = version + 1
+       WHERE id = ? AND (? IS NULL OR version = ?) AND NOT EXISTS (
+         SELECT 1 FROM applications WHERE job_id = jobs.id AND stage IN ('submitted','in_review','shortlisted','interview','offer')
+       )`
+    ).bind(now, id, expectedVersion, expectedVersion),
+    c.env.DB.prepare(
+      `INSERT INTO audit_events (id, actor_id, organization_id, action, target_type, target_id, metadata_json, created_at)
+       SELECT ?, ?, ?, 'job.closed', 'job', ?, '{}', ? WHERE changes() = 1`
+    ).bind(auditId, user.id, job.organization_id, id, now),
+  ])
+  if ((results[0] as any)?.meta?.changes !== 1) {
+    const latest = await c.env.DB.prepare('SELECT version FROM jobs WHERE id = ?').bind(id).first<{ version: number }>()
+    return c.json({ error: { code: latest?.version !== job.version ? 'CONFLICT' : 'ACTIVE_APPLICANTS', message: latest?.version !== job.version ? 'This job changed; refresh and retry.' : 'Resolve active applications before closing.' } }, 409)
+  }
   return c.json({ data: { id, status: 'closed' } })
+})
+
+app.post('/:id/archive', requireAuth, async (c) => {
+  const user = c.get('user')!
+  const id = c.req.param('id')
+  const body = await c.req.json().catch(() => ({}))
+  const job = await c.env.DB.prepare(
+    'SELECT id, origin, organization_id, status, version, archived_at FROM jobs WHERE id = ?'
+  ).bind(id).first<any>()
+  if (!job) return c.json({ error: { code: 'NOT_FOUND', message: 'Job not found' } }, 404)
+  if (job.origin !== 'native') return c.json({ error: { code: 'INVALID', message: 'Imported jobs cannot be archived' } }, 400)
+  const membership = await c.env.DB.prepare('SELECT role FROM memberships WHERE organization_id = ? AND user_id = ?')
+    .bind(job.organization_id, user.id).first<any>()
+  if (!membership || !['owner', 'admin', 'recruiter'].includes(membership.role)) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Not authorized' } }, 403)
+  }
+  if (job.status !== 'closed') return c.json({ error: { code: 'INVALID_STATE', message: 'Close the vacancy before archiving it' } }, 409)
+  if (job.archived_at) return c.json({ data: { id, archived_at: job.archived_at, version: job.version } })
+  if (!Number.isInteger(body.expected_version) || body.expected_version !== job.version) {
+    return c.json({ error: { code: 'CONFLICT', message: 'This job changed; refresh and retry.' } }, 409)
+  }
+  const reason = typeof body.reason === 'string' ? body.reason.trim().slice(0, 1000) : ''
+  if (!reason) return c.json({ error: { code: 'REASON_REQUIRED', message: 'Provide a reason for archiving this job' } }, 400)
+  const now = Math.floor(Date.now() / 1000)
+  const results = await c.env.DB.batch([
+    c.env.DB.prepare(
+      `UPDATE jobs SET archived_at = ?, version = version + 1, updated_at = ?
+       WHERE id = ? AND status = 'closed' AND archived_at IS NULL AND version = ?`
+    ).bind(now, now, id, job.version),
+    c.env.DB.prepare(
+      `INSERT INTO audit_events (id, actor_id, organization_id, action, target_type, target_id, metadata_json, created_at)
+       SELECT ?, ?, ?, 'job.archived', 'job', ?, ?, ? WHERE changes() = 1`
+    ).bind(nanoid(), user.id, job.organization_id, id, JSON.stringify({ reason, version: job.version + 1 }), now),
+  ])
+  if ((results[0] as any)?.meta?.changes !== 1) {
+    return c.json({ error: { code: 'CONFLICT', message: 'This job changed; refresh and retry.' } }, 409)
+  }
+  return c.json({ data: { id, archived_at: now, version: job.version + 1 } })
+})
+
+app.patch('/:id/status', requireAuth, async (c) => {
+  const user = c.get('user')!
+  const id = c.req.param('id')
+  const body = await c.req.json().catch(() => ({}))
+  const job = await c.env.DB.prepare('SELECT id, origin, organization_id, status, version, archived_at FROM jobs WHERE id = ?').bind(id).first<any>()
+  if (!job) return c.json({ error: { code: 'NOT_FOUND', message: 'Job not found' } }, 404)
+  if (job.origin !== 'native') return c.json({ error: { code: 'INVALID', message: 'Imported job status is controlled by its source' } }, 400)
+  const membership = await c.env.DB.prepare('SELECT role FROM memberships WHERE organization_id = ? AND user_id = ?')
+    .bind(job.organization_id, user.id).first<any>()
+  if (!membership || !['owner', 'admin', 'recruiter'].includes(membership.role)) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Not authorized' } }, 403)
+  }
+  if (job.archived_at) return c.json({ error: { code: 'ARCHIVED', message: 'Archived jobs cannot be reopened or changed' } }, 409)
+  if (!['draft', 'published', 'paused', 'closed'].includes(body.status)) {
+    return c.json({ error: { code: 'INVALID', message: 'Choose draft, published, paused, or closed' } }, 400)
+  }
+  if (!Number.isInteger(body.expected_version) || body.expected_version !== job.version) {
+    return c.json({ error: { code: 'CONFLICT', message: 'This job changed since it was loaded. Refresh and retry.' } }, 409)
+  }
+  if (body.status === job.status) return c.json({ data: { id, status: job.status, version: job.version } })
+  if (job.status === 'closed' && body.status !== 'closed' && (body.reopen_confirmed !== true || typeof body.reason !== 'string' || !body.reason.trim())) {
+    return c.json({ error: { code: 'REOPEN_CONFIRMATION_REQUIRED', message: 'Reopening a closed vacancy requires confirmation and a reason' } }, 400)
+  }
+  if (body.status === 'closed') {
+    const active = await c.env.DB.prepare(
+      "SELECT COUNT(*) AS total FROM applications WHERE job_id = ? AND stage IN ('submitted','in_review','shortlisted','interview','offer')"
+    ).bind(id).first<{ total: number }>()
+    if (active?.total) return c.json({ error: { code: 'ACTIVE_APPLICANTS', message: 'Resolve active applications before closing this vacancy' } }, 409)
+  }
+  const now = Math.floor(Date.now() / 1000)
+  const eventId = nanoid()
+  const auditId = nanoid()
+  const results = await c.env.DB.batch([
+    c.env.DB.prepare(
+    `UPDATE jobs SET status = ?, published_at = CASE WHEN ? = 'published' THEN COALESCE(published_at, ?) ELSE published_at END,
+     updated_at = ?, version = version + 1 WHERE id = ? AND version = ?
+       AND (? != 'closed' OR NOT EXISTS (
+         SELECT 1 FROM applications WHERE job_id = jobs.id AND stage IN ('submitted','in_review','shortlisted','interview','offer')
+       ))`
+    ).bind(body.status, body.status, now, now, id, job.version, body.status),
+    c.env.DB.prepare(
+      `INSERT INTO audit_events (id, actor_id, organization_id, action, target_type, target_id, metadata_json, created_at)
+       SELECT ?, ?, ?, 'job.status_changed', 'job', ?, ?, ? WHERE changes() = 1`
+    ).bind(auditId, user.id, job.organization_id, id, JSON.stringify({ from: job.status, to: body.status, reason: typeof body.reason === 'string' ? body.reason.trim().slice(0, 1000) : null, version: job.version + 1 }), now),
+    c.env.DB.prepare(
+      `INSERT INTO outbox (id, event_id, event_type, payload_json, state, created_at)
+       SELECT ?, ?, 'job.published', ?, 'pending', ? WHERE ? = 'published' AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`
+    ).bind(nanoid(), eventId, JSON.stringify({ job_id: id, organization_id: job.organization_id }), now, body.status, auditId),
+  ])
+  if ((results[0] as any)?.meta?.changes !== 1) return c.json({ error: { code: 'CONFLICT', message: 'This job changed or still has active applicants; refresh and retry.' } }, 409)
+  return c.json({ data: { id, status: body.status, version: job.version + 1 } })
 })
 
 app.post('/:id/save', requireAuth, async (c) => {

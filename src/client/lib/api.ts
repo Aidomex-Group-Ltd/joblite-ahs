@@ -78,6 +78,33 @@ export function apiPatch<T>(path: string, body?: unknown): Promise<ApiEnvelope<T
   return request<T>(path, { method: 'PATCH', body: body === undefined ? undefined : JSON.stringify(body) })
 }
 
+/** Downloads an authorized non-JSON resource (for example a CSV export) as a file. */
+export async function apiDownload(path: string, filename: string): Promise<void> {
+  let response: Response
+  try {
+    response = await fetch(`/api/v1${path}`, { credentials: 'include', headers: { Accept: 'text/csv' } })
+  } catch {
+    throw new ApiError(0, 'NETWORK_ERROR', 'Could not reach Joblite. Check your connection and try again.')
+  }
+  if (!response.ok) {
+    const payload: any = await response.json().catch(() => null)
+    throw new ApiError(
+      response.status,
+      typeof payload?.error?.code === 'string' ? payload.error.code : 'REQUEST_FAILED',
+      typeof payload?.error?.message === 'string' ? payload.error.message : `Export failed with status ${response.status}`
+    )
+  }
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
 export function apiPut<T>(path: string, body?: unknown): Promise<ApiEnvelope<T>> {
   return request<T>(path, { method: 'PUT', body: body === undefined ? undefined : JSON.stringify(body) })
 }

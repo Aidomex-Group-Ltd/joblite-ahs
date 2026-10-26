@@ -72,17 +72,19 @@ test.describe('Signup and Onboarding E2E Journey', () => {
     await expect(termsCheck).toBeVisible()
     await expect(page.locator('.jl-signup-form input[type="checkbox"]')).toHaveCount(1)
     await expect(termsCheck).toHaveAttribute('required', '')
-    await expect(page.getByRole('link', { name: 'Terms of Service' })).toHaveAttribute('href', '/legal/terms')
-    await expect(page.getByRole('link', { name: 'Privacy Policy' })).toHaveAttribute('href', '/legal/privacy')
+    const termsLink = page.locator('.jl-signup-form').getByRole('link', { name: 'Terms of Service' })
+    const privacyLink = page.locator('.jl-signup-form').getByRole('link', { name: 'Privacy Policy' })
+    await expect(termsLink).toHaveAttribute('href', '/legal/terms')
+    await expect(privacyLink).toHaveAttribute('href', '/legal/privacy')
 
     const termsPopupPromise = page.waitForEvent('popup')
-    await page.getByRole('link', { name: 'Terms of Service' }).click()
+    await termsLink.click()
     const termsPage = await termsPopupPromise
     await expect(termsPage.getByRole('heading', { name: 'Terms of Service' })).toBeVisible()
     await termsPage.close()
 
     const privacyPopupPromise = page.waitForEvent('popup')
-    await page.getByRole('link', { name: 'Privacy Policy' }).click()
+    await privacyLink.click()
     const privacyPage = await privacyPopupPromise
     await expect(privacyPage.getByRole('heading', { name: 'Privacy Notice' })).toBeVisible()
     await privacyPage.close()

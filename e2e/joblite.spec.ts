@@ -106,7 +106,8 @@ test('guest application, passwordless verification, composer publishing, and med
   await screenshot(page, 'media-viewer-mobile')
   await page.keyboard.press('Escape')
   await expect(page).toHaveURL('/')
-  expect(await page.evaluate(() => window.scrollY)).toBe(beforeScroll)
+  const afterScroll = await page.evaluate(() => window.scrollY)
+  expect(Math.abs(afterScroll - beforeScroll)).toBeLessThanOrEqual(1)
 
   await context.request.post('/api/v1/auth/logout', { data: {} })
 

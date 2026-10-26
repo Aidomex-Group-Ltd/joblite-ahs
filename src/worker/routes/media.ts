@@ -149,7 +149,18 @@ app.get('/:id/content', optionalAuth, async (c) => {
      WHERE pm.media_id = ? AND p.state = 'published' AND p.visibility = 'public' LIMIT 1`
   ).bind(mediaId).first()
   const user = c.get('user')
-  if (!publicAttachment && (!user || user.id !== media.owner_id)) {
+  // A CV is only readable by its owner or by a hiring member of the organization
+  // that received it on an application. The snapshot keeps the original media id,
+  // so replacing the profile CV later never rewrites submitted evidence.
+  const applicationCv = !publicAttachment && user && media.purpose === 'cv'
+    ? await c.env.DB.prepare(
+      `SELECT a.id FROM application_snapshots s
+       JOIN applications a ON a.id = s.application_id JOIN jobs j ON j.id = a.job_id
+       JOIN memberships m ON m.organization_id = j.organization_id
+       WHERE s.cv_media_id = ? AND m.user_id = ? LIMIT 1`
+    ).bind(mediaId, user.id).first()
+    : null
+  if (!publicAttachment && !applicationCv && (!user || user.id !== media.owner_id)) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Media not found' } }, 404)
   }
 
@@ -161,6 +172,9 @@ app.get('/:id/content', optionalAuth, async (c) => {
     'X-Content-Type-Options': 'nosniff',
     'Accept-Ranges': 'bytes',
   })
+  if (media.purpose === 'cv' && !publicAttachment) {
+    headers.set('Content-Disposition', 'inline; filename="submitted-cv.pdf"')
+  }
 
   if (rangeHeader) {
     const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim())
@@ -194,6 +208,12 @@ app.delete('/:id', requireAuth, async (c) => {
 
   const attached = await c.env.DB.prepare('SELECT post_id FROM post_media WHERE media_id = ?').bind(mediaId).first()
   if (attached) return c.json({ error: { code: 'MEDIA_IN_USE', message: 'This media is attached to a published post' } }, 409)
+  const submittedEvidence = await c.env.DB.prepare(
+    'SELECT application_id FROM application_snapshots WHERE cv_media_id = ? LIMIT 1'
+  ).bind(mediaId).first()
+  if (submittedEvidence) {
+    return c.json({ error: { code: 'MEDIA_IN_USE', message: 'This CV is preserved as submitted application evidence' } }, 409)
+  }
 
   await c.env.MEDIA.delete(media.object_key).catch(() => {})
   await c.env.DB.prepare('DELETE FROM media WHERE id = ?').bind(mediaId).run()

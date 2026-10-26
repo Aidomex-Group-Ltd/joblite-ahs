@@ -1,0 +1,157 @@
+/*
+ * Feed readability and accessibility.
+ *
+ * The base is the browser default (html font-size 100%, 16px unless the user
+ * changed it) and every size below is relative, so browser font preferences and
+ * 200% zoom keep working. Rules are scoped to feed elements instead of flattening
+ * every text size, so headings, badges and primary text stay distinguishable.
+ */
+:root {
+  --jl-feed-body-size: 1rem;
+  --jl-feed-meta-size: 0.875rem;
+  --jl-feed-badge-size: 0.8125rem;
+  --jl-feed-line-height: 1.55;
+}
+
+.jl-app {
+  --jl-muted: #586988;
+}
+
+.jl-primary {
+  background: #0066cc;
+}
+
+.jl-primary:hover {
+  background: #0057ad;
+}
+
+/* Primary feed text: post bodies, job previews and their titles. */
+.jl-post-text,
+.jl-summary {
+  font-size: var(--jl-feed-body-size);
+  line-height: var(--jl-feed-line-height);
+  overflow-wrap: anywhere;
+}
+
+.jl-job-title {
+  font-size: 1.0625rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* Secondary metadata stays readable rather than shrinking to 10px. */
+.jl-meta strong {
+  font-size: 1rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.jl-meta small,
+.jl-post .jl-subtitle,
+.jl-applications small {
+  color: #586988;
+  font-size: var(--jl-feed-meta-size);
+  line-height: 1.45;
+}
+
+.jl-sync,
+.jl-sync strong,
+.jl-sync small,
+.jl-source-line,
+.jl-external-note,
+.jl-guest button,
+.jl-post-actions > button {
+  font-size: var(--jl-feed-meta-size);
+  line-height: 1.45;
+}
+
+.jl-guest button,
+.jl-post-actions > button {
+  color: #586988;
+}
+
+.jl-origin {
+  font-size: var(--jl-feed-badge-size);
+  line-height: 1.35;
+}
+
+.jl-tags span {
+  font-size: var(--jl-feed-badge-size);
+  line-height: 1.35;
+}
+
+.jl-job .jl-location,
+.jl-job .jl-salary,
+.jl-location,
+.jl-salary {
+  font-size: var(--jl-feed-meta-size);
+  line-height: 1.45;
+}
+
+.jl-guest {
+  font-size: var(--jl-feed-meta-size);
+  line-height: 1.45;
+}
+
+.jl-guest button {
+  font-size: var(--jl-feed-meta-size);
+}
+
+/* 44px+ targets keep actions usable by touch and at high zoom. */
+.jl-post-actions {
+  justify-content: space-between;
+}
+
+.jl-post-actions > button {
+  min-width: 44px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: var(--jl-feed-meta-size);
+}
+
+.jl-post-actions > button:hover {
+  background: #f1f6fd;
+}
+
+.jl-post-actions > button.liked {
+  color: #d92c5b;
+  background: #fff1f4;
+}
+
+/*
+ * Form controls never fall below 1rem: iOS and browser zoom both stay legible,
+ * and the compact mobile filter sizes in JobliteHome.css are superseded here.
+ */
+.jl-app input:not([type='checkbox']):not([type='radio']):not([type='range']),
+.jl-app select,
+.jl-app textarea {
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.jl-card input:not([type='checkbox']):not([type='radio']):not([type='range']),
+.jl-card select,
+.jl-card textarea {
+  font-size: 1rem;
+}
+
+/* Long text, URLs and attachments wrap instead of forcing horizontal scroll. */
+.jl-attachment,
+.jl-notice,
+.jl-state p,
+.jl-desktop-info p {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .jl-post-text,
+  .jl-summary {
+    font-size: var(--jl-feed-body-size);
+  }
+
+  .jl-post-actions > button {
+    min-height: 48px;
+  }
+}

@@ -139,13 +139,13 @@ export function publicPostUrl(postId: string): string {
 
 export function stageLabel(stage: string): string {
   const labels: Record<string, string> = {
-    submitted: 'Submitted',
-    in_review: 'In review',
+    submitted: 'Applied',
+    in_review: 'Screening',
     shortlisted: 'Shortlisted',
     interview: 'Interview',
     offer: 'Offer received',
     hired: 'Hired',
-    rejected: 'Not selected',
+    rejected: 'Rejected',
     withdrawn: 'Withdrawn',
     closed: 'Closed',
   }

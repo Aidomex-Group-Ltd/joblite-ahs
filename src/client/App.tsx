@@ -16,6 +16,7 @@ import Composer from './pages/Composer'
 import PostMedia from './pages/PostMedia'
 import PostDetail from './pages/PostDetail'
 import ApplicationDetail from './pages/ApplicationDetail'
+import SupportChat from './components/SupportChat'
 import SignUp from './pages/SignUp'
 import Onboarding from './pages/Onboarding'
 import { AuthExperienceProvider, SignInPage } from './components/AuthExperience'
@@ -44,6 +45,7 @@ export default function App() {
   return (
     <AuthExperienceProvider>
       <RouteMetadata />
+      <SupportChat />
       <Layout>
       <Routes>
         <Route path="/" element={<Home />} />

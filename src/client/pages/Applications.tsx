@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { apiGet, errorMessage } from '../lib/api'
+import { apiGet, apiPost, errorMessage } from '../lib/api'
 import { formatDate, stageLabel } from '../lib/format'
 import { useSession } from '../lib/session'
 import { useAuthExperience } from '../components/AuthExperience'
@@ -28,7 +28,7 @@ type ExternalRecord = {
   source_name: string | null
 }
 
-const STAGES = ['submitted', 'in_review', 'shortlisted', 'interview', 'offer', 'hired', 'rejected', 'withdrawn']
+const STAGES = ['submitted', 'in_review', 'shortlisted', 'interview', 'offer', 'hired', 'rejected', 'withdrawn', 'closed']
 
 export default function Applications() {
   const session = useSession()
@@ -71,6 +71,16 @@ export default function Applications() {
     acc[application.stage] = (acc[application.stage] || 0) + 1
     return acc
   }, {})
+
+  async function withdraw(application: Application) {
+    if (!window.confirm('Withdraw this application? This cannot be undone.')) return
+    try {
+      await apiPost(`/applications/${encodeURIComponent(application.id)}/withdraw`, { expected_version: application.version, confirmed: true })
+      await load()
+    } catch (caught) {
+      setError(errorMessage(caught))
+    }
+  }
 
   if (!session.loading && !session.user) {
     return (
@@ -150,6 +160,11 @@ export default function Applications() {
                   <Link className="btn btn-secondary" to={`/applications/${application.id}`}>
                     View timeline
                   </Link>
+                  {['submitted', 'in_review', 'shortlisted', 'interview', 'offer'].includes(application.stage) ? (
+                    <button type="button" className="btn btn-secondary" onClick={() => void withdraw(application)}>
+                      Withdraw
+                    </button>
+                  ) : null}
                 </div>
               </article>
             ))}

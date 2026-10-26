@@ -1,5 +1,6 @@
 export type Env = {
   DB: D1Database
+  AI?: Ai
   MEDIA: R2Bucket
   ASSETS?: Fetcher
   OUTBOX_QUEUE: Queue

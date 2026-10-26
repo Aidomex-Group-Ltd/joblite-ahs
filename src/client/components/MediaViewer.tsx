@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiDelete, apiGet, apiPost, errorMessage, isAbortError } from '../lib/api'
 import { formatRelativeTime, publicPostUrl } from '../lib/format'
 import './MediaViewer.css'
+import './MediaViewerMobile.css'
 
 export type ViewerMedia = {
   id?: string

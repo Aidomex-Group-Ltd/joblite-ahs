@@ -49,6 +49,17 @@ type Job = {
   eligible_countries: Array<{ country_code: string }>
   saved: boolean
   status: string
+  application_questions_json: string | null
+}
+
+function parseQuestions(value: string | null | undefined): string[] {
+  if (!value) return []
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string') ? parsed : []
+  } catch {
+    return []
+  }
 }
 
 export default function JobDetail() {
@@ -64,6 +75,7 @@ export default function JobDetail() {
   const [applying, setApplying] = useState(false)
   const [applied, setApplied] = useState(false)
   const [externalMarked, setExternalMarked] = useState(false)
+  const [answers, setAnswers] = useState<string[]>([])
 
   const load = useCallback(async () => {
     if (!id) return
@@ -144,6 +156,7 @@ export default function JobDetail() {
       openAuth({ intent: 'apply', nextPath: `/jobs/${job.id}` })
       return
     }
+    setAnswers(parseQuestions(job.application_questions_json).map(() => ''))
     setConfirming(true)
   }
 
@@ -152,7 +165,11 @@ export default function JobDetail() {
     setApplying(true)
     setNotice('')
     try {
-      await apiPost('/applications', { job_id: job.id })
+      const questions = parseQuestions(job.application_questions_json)
+      await apiPost('/applications', {
+        job_id: job.id,
+        answers: questions.map((question, index) => ({ question, answer: answers[index] || '' })),
+      })
       setApplied(true)
       setConfirming(false)
       setNotice('Your application was submitted with an immutable snapshot of your profile.')
@@ -194,6 +211,7 @@ export default function JobDetail() {
   const salary = formatSalary(job.salary, job.salary_text)
   const companyName = job.org_name || job.company_name || 'Organization'
   const externalUrl = safeExternalUrl(job.application_url || job.canonical_url)
+  const applicationQuestions = parseQuestions(job.application_questions_json)
 
   return (
     <div className="page">
@@ -315,8 +333,26 @@ export default function JobDetail() {
               profile later without changing this application. Your application enters review; no decision is made
               automatically.
             </p>
+            {applicationQuestions.map((question, index) => (
+              <label className="application-question" key={`${index}-${question}`}>
+                {question}
+                <textarea
+                  className="input"
+                  rows={3}
+                  maxLength={4000}
+                  required
+                  value={answers[index] || ''}
+                  onChange={(event) => setAnswers((current) => current.map((answer, answerIndex) => answerIndex === index ? event.target.value : answer))}
+                />
+              </label>
+            ))}
             <div className="button-row">
-              <button type="button" className="btn" onClick={() => void submitApplication()} disabled={applying}>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => void submitApplication()}
+                disabled={applying || applicationQuestions.some((_, index) => !answers[index]?.trim())}
+              >
                 {applying ? 'Submitting…' : 'Confirm application'}
               </button>
               <button type="button" className="btn btn-secondary" onClick={() => setConfirming(false)} disabled={applying}>

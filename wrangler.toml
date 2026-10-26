@@ -17,6 +17,9 @@ database_name = "joblite-db"
 database_id = "369b4d6d-115d-41a3-ab93-132a25063758"
 migrations_dir = "migrations"
 
+[ai]
+binding = "AI"
+
 [[r2_buckets]]
 binding = "MEDIA"
 bucket_name = "joblite-media"
