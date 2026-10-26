@@ -22,6 +22,8 @@ export type Env = {
 export type Variables = {
   user?: { id: string; email: string; verified_at?: number | null; display_name?: string | null }
   session?: any
+  requestId?: string
+  authChallengePhase?: string
 }
 
 export type AppContext = { Bindings: Env; Variables: Variables }

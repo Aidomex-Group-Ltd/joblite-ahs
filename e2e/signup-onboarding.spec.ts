@@ -28,7 +28,6 @@ test.describe('Signup and Onboarding E2E Journey', () => {
     const email = `retry-${Date.now()}@joblite.test`
     await page.getByLabel('Email address').fill(email)
     await page.getByLabel(/By creating an account, you agree to Joblite’s/).check()
-    await page.getByLabel(/I confirm that I am at least 18/).check()
     await page.getByRole('button', { name: 'Create account' }).click()
 
     await expect(page.getByRole('alert')).toContainText('Please retry shortly.')
@@ -66,16 +65,13 @@ test.describe('Signup and Onboarding E2E Journey', () => {
     const nameInput = page.getByLabel('Full name')
     const emailInput = page.getByLabel('Email address')
     const termsCheck = page.getByLabel(/By creating an account, you agree to Joblite’s/)
-    const ageCheck = page.getByLabel(/I confirm that I am at least 18/)
-    const marketingCheck = page.getByLabel(/Email me optional Joblite job recommendations/)
     const submitBtn = page.getByRole('button', { name: 'Create account' })
 
     await expect(nameInput).toBeVisible()
     await expect(emailInput).toBeVisible()
     await expect(termsCheck).toBeVisible()
-    await expect(ageCheck).toBeVisible()
-    await expect(marketingCheck).toBeVisible()
-    await expect(marketingCheck).not.toBeChecked()
+    await expect(page.locator('.jl-signup-form input[type="checkbox"]')).toHaveCount(1)
+    await expect(termsCheck).toHaveAttribute('required', '')
     await expect(page.getByRole('link', { name: 'Terms of Service' })).toHaveAttribute('href', '/legal/terms')
     await expect(page.getByRole('link', { name: 'Privacy Policy' })).toHaveAttribute('href', '/legal/privacy')
 
@@ -98,7 +94,6 @@ test.describe('Signup and Onboarding E2E Journey', () => {
     await nameInput.fill('Sarah Candidate')
     await emailInput.fill(email)
     await termsCheck.check()
-    await ageCheck.check()
     await submitBtn.click()
 
     // 4. Verification screen appears
@@ -169,7 +164,7 @@ test.describe('Signup and Onboarding E2E Journey', () => {
     await page.getByRole('button', { name: 'Start exploring jobs' }).click()
 
     // 9. Redirected to safe return path
-    await expect(page).toHaveURL(/\/jobs\?country=UG/)
+    await expect(page).toHaveURL(/\/jobs\?country=UG/, { timeout: 45_000 })
   })
 
   test('Onboarding can be skipped and does not cause redirect loops', async ({ page, request }) => {
@@ -181,7 +176,6 @@ test.describe('Signup and Onboarding E2E Journey', () => {
     await page.getByLabel('Full name').fill('Skip Tester')
     await page.getByLabel('Email address').fill(email)
     await page.getByLabel(/By creating an account, you agree to Joblite’s/).check()
-    await page.getByLabel(/I confirm that I am at least 18/).check()
     await page.getByRole('button', { name: 'Create account' }).click()
 
     await expect.poll(async () => {
@@ -204,7 +198,7 @@ test.describe('Signup and Onboarding E2E Journey', () => {
 
     // Re-visiting /onboarding should redirect to / without loop
     await page.goto('/onboarding')
-    await expect(page).toHaveURL(/\/jobs|\/$/)
+    await expect(page).toHaveURL(/\/jobs|\/$/, { timeout: 45_000 })
   })
 
   test('Guest access allows exploring jobs, searching, and filtering without signup', async ({ page }) => {

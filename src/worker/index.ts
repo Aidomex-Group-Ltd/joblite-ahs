@@ -55,9 +55,21 @@ app.route('/api/v1/skills', skills)
 
 // API failures must stay machine-readable instead of falling through to the SPA shell.
 app.onError((error, c) => {
-  console.error('unhandled worker error', error instanceof Error ? error.message : 'unknown error')
+  console.error(JSON.stringify({
+    event: 'worker_request_failed',
+    request_id: c.get('requestId'),
+    phase: c.get('authChallengePhase'),
+    method: c.req.method,
+    path: c.req.path,
+  }))
   if (c.req.path.startsWith('/api/')) {
-    return c.json({ error: { code: 'INTERNAL', message: 'Joblite could not complete this request. Please retry.' } }, 500)
+    return c.json({
+      error: {
+        code: 'INTERNAL',
+        message: 'Joblite could not complete this request. Please retry using the same browser session.',
+        ...(c.get('requestId') ? { request_id: c.get('requestId') } : {}),
+      },
+    }, 500)
   }
   return c.text('Internal Server Error', 500)
 })

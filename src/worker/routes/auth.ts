@@ -29,6 +29,16 @@ type ChallengeRow = {
   language: string | null
 }
 
+type ChallengeRequestRow = {
+  email_normalized: string
+  challenge_id: string
+  delivery_status: 'sending' | 'accepted' | 'failed'
+  provider_message_id: string | null
+  expires_at: number
+  consumed_at: number | null
+  created_at: number
+}
+
 // Local Playwright mail sink only. This route is absent from production behavior.
 app.get('/test-mail/latest', async (c) => {
   if (c.env.ENVIRONMENT !== 'test' || c.env.TEST_MAIL_SINK !== 'enabled') {
@@ -45,6 +55,8 @@ app.get('/test-mail/latest', async (c) => {
 
 app.post('/challenges', async (c) => {
   const requestId = nanoid(12)
+  c.set('requestId', requestId)
+  c.set('authChallengePhase', 'validation')
   c.header('X-Request-ID', requestId)
   const body = await c.req.json().catch(() => ({}))
   const email = typeof body.email === 'string' ? body.email.normalize('NFKC').toLowerCase().trim() : ''
@@ -52,11 +64,32 @@ app.post('/challenges', async (c) => {
     return challengeError(c, 400, requestId, 'INVALID_EMAIL', 'Enter a valid email address')
   }
 
+  const suppliedKey = body.idempotency_key
+  if (suppliedKey !== undefined && (typeof suppliedKey !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(suppliedKey))) {
+    return challengeError(c, 400, requestId, 'INVALID_REQUEST_KEY', 'Refresh the signup page and try again.')
+  }
+  const idempotencyKey = typeof suppliedKey === 'string' ? suppliedKey : nanoid(24)
+  const idempotencyHash = await hashToken(`${email}\u0000${idempotencyKey}`, c.env.SESSION_SECRET)
+  const cooldown = Math.max(1, Number(c.env.AUTH_RESEND_COOLDOWN_SECONDS || DEFAULT_RESEND_SECONDS))
+
+  c.set('authChallengePhase', 'idempotency_lookup')
+  const prior = await findChallengeRequest(c.env.DB, idempotencyHash, email)
+  if (prior) return respondToChallengeRequest(c, prior, requestId)
+
+  if (!c.env.EMAIL_API_KEY && !c.env.RESEND_API_KEY && !(c.env.ENVIRONMENT === 'test' && c.env.TEST_MAIL_SINK === 'enabled')) {
+    console.warn(JSON.stringify({ event: 'auth_email_delivery_failed', request_id: requestId, reason: 'configuration_missing' }))
+    return challengeError(c, 503, requestId, 'EMAIL_NOT_CONFIGURED', 'Sign-in email is temporarily unavailable. Please try again later.', cooldown)
+  }
+  if (!(c.env.ENVIRONMENT === 'test' && c.env.TEST_MAIL_SINK === 'enabled') && !c.env.EMAIL_FROM) {
+    console.warn(JSON.stringify({ event: 'auth_email_delivery_failed', request_id: requestId, reason: 'configuration_missing' }))
+    return challengeError(c, 503, requestId, 'EMAIL_NOT_CONFIGURED', 'Sign-in email is temporarily unavailable. Please try again later.', cooldown)
+  }
+
   const now = Math.floor(Date.now() / 1000)
+  c.set('authChallengePhase', 'cooldown_check')
   const recent = await c.env.DB.prepare(
     'SELECT created_at FROM auth_challenges WHERE email_normalized = ? ORDER BY created_at DESC LIMIT 1'
   ).bind(email).first<{ created_at: number }>()
-  const cooldown = Math.max(1, Number(c.env.AUTH_RESEND_COOLDOWN_SECONDS || DEFAULT_RESEND_SECONDS))
   if (recent && recent.created_at + cooldown > now) {
     return challengeError(
       c,
@@ -82,63 +115,118 @@ app.post('/challenges', async (c) => {
   const tokenHash = await hashToken(code, c.env.SESSION_SECRET)
   const expiresAt = now + CODE_TTL_SECONDS
 
-  // Supersede earlier codes and create the new challenge in one D1 batch.
+  c.set('authChallengePhase', 'challenge_persist')
   await c.env.DB.batch([
-    c.env.DB.prepare('UPDATE auth_challenges SET consumed_at = ? WHERE email_normalized = ? AND consumed_at IS NULL')
-      .bind(now, email),
     c.env.DB.prepare(
-      'INSERT INTO auth_challenges (id, token_hash, email_normalized, purpose, expires_at, created_at, terms_version, presented_region, language) VALUES (?,?,?,?,?,?,?,?,?)'
-    ).bind(challengeId, tokenHash, email, 'login', expiresAt, now, CURRENT_TERMS_VERSION, validRegion(body.region), validLanguage(body.language)),
+      `INSERT INTO auth_challenges
+        (id, token_hash, email_normalized, purpose, expires_at, created_at, terms_version, presented_region, language)
+       SELECT ?, ?, ?, 'login', ?, ?, ?, ?, ?
+       WHERE NOT EXISTS (
+         SELECT 1 FROM auth_challenges WHERE email_normalized = ? AND created_at > ?
+       ) AND NOT EXISTS (
+         SELECT 1 FROM auth_challenge_requests WHERE idempotency_hash = ?
+       )`
+    ).bind(
+      challengeId, tokenHash, email, expiresAt, now, CURRENT_TERMS_VERSION,
+      validRegion(body.region), validLanguage(body.language), email, now - cooldown, idempotencyHash
+    ),
+    c.env.DB.prepare(
+      `INSERT INTO auth_challenge_requests
+        (idempotency_hash, email_normalized, challenge_id, delivery_status, created_at)
+       SELECT ?, ?, ?, 'sending', ?
+       WHERE EXISTS (SELECT 1 FROM auth_challenges WHERE id = ? AND email_normalized = ?)
+         AND NOT EXISTS (SELECT 1 FROM auth_challenge_requests WHERE idempotency_hash = ?)`
+    ).bind(idempotencyHash, email, challengeId, now, challengeId, email, idempotencyHash),
+    c.env.DB.prepare(
+      `UPDATE auth_challenges SET consumed_at = ?
+       WHERE email_normalized = ? AND consumed_at IS NULL AND id != ?
+         AND EXISTS (
+           SELECT 1 FROM auth_challenge_requests
+           WHERE idempotency_hash = ? AND challenge_id = ?
+         )`
+    ).bind(now, email, challengeId, idempotencyHash, challengeId),
   ])
 
+  const requestRow = await findChallengeRequest(c.env.DB, idempotencyHash, email)
+  if (!requestRow) {
+    const latest = await c.env.DB.prepare(
+      'SELECT created_at FROM auth_challenges WHERE email_normalized = ? ORDER BY created_at DESC LIMIT 1'
+    ).bind(email).first<{ created_at: number }>()
+    const retryAfter = latest ? Math.max(1, latest.created_at + cooldown - now) : cooldown
+    return challengeError(c, 429, requestId, 'RESEND_COOLDOWN', 'Please wait before requesting another code.', retryAfter)
+  }
+  if (requestRow.challenge_id !== challengeId) return respondToChallengeRequest(c, requestRow, requestId)
+
   try {
+    c.set('authChallengePhase', 'email_delivery')
     if (c.env.ENVIRONMENT === 'test' && c.env.TEST_MAIL_SINK === 'enabled') {
       await c.env.DB.prepare(
         'INSERT INTO auth_test_mail (id, email_normalized, challenge_id, code, created_at) VALUES (?,?,?,?,?)'
       ).bind(nanoid(), email, challengeId, code, now).run()
+      c.set('authChallengePhase', 'delivery_accepted')
+      await acceptChallengeRequest(c.env.DB, challengeId)
+      return challengeResponse(c, requestId, challengeId, expiresAt, cooldown, 'accepted')
     } else {
-      await deliverCode(c.env, email, code)
+      const providerMessageId = await deliverCode(c.env, email, code)
+      c.set('authChallengePhase', 'delivery_accepted')
+      try {
+        await acceptChallengeRequest(c.env.DB, challengeId, providerMessageId)
+      } catch {
+        console.error(JSON.stringify({
+          event: 'auth_challenge_acceptance_update_failed',
+          request_id: requestId,
+          challenge_id: challengeId,
+          ...(providerMessageId ? { provider_message_id: providerMessageId } : {}),
+        }))
+        return challengeResponse(c, requestId, challengeId, expiresAt, cooldown, 'unknown', 202)
+      }
+      console.info(JSON.stringify({
+        event: 'auth_email_provider_accepted',
+        request_id: requestId,
+        challenge_id: challengeId,
+        ...(providerMessageId ? { provider_message_id: providerMessageId } : {}),
+      }))
+      c.set('authChallengePhase', 'response')
+      return challengeResponse(c, requestId, challengeId, expiresAt, cooldown, 'accepted')
     }
   } catch (error) {
-    await c.env.DB.prepare('UPDATE auth_challenges SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL')
-      .bind(now, challengeId).run()
+    c.set('authChallengePhase', 'delivery_failure_handling')
     if (error instanceof EmailConfigurationError) {
       console.warn(JSON.stringify({ event: 'auth_email_delivery_failed', request_id: requestId, reason: 'configuration_missing' }))
+      await failChallengeRequest(c.env.DB, challengeId, now)
       return challengeError(c, 503, requestId, 'EMAIL_NOT_CONFIGURED', 'Sign-in email is temporarily unavailable. Please try again later.', cooldown)
     }
     const deliveryError = error instanceof EmailDeliveryError ? error : null
-    const status = deliveryError?.kind === 'timeout'
-      ? 504
-      : deliveryError?.kind === 'provider_rate_limited' || deliveryError?.kind === 'provider_unavailable'
-        ? 503
-        : 502
-    const code = deliveryError?.kind === 'timeout'
-      ? 'EMAIL_DELIVERY_TIMEOUT'
-      : deliveryError?.kind === 'provider_rate_limited'
-        ? 'EMAIL_PROVIDER_BUSY'
-        : deliveryError?.kind === 'provider_unavailable'
-          ? 'EMAIL_PROVIDER_UNAVAILABLE'
-          : 'EMAIL_DELIVERY_FAILED'
+    if (!deliveryError || deliveryError.kind === 'timeout' || deliveryError.kind === 'network') {
+      console.warn(JSON.stringify({
+        event: 'auth_email_delivery_outcome_unknown',
+        request_id: requestId,
+        challenge_id: challengeId,
+        reason: deliveryError?.kind || 'unexpected_failure',
+      }))
+      return challengeResponse(c, requestId, challengeId, expiresAt, cooldown, 'unknown', 202)
+    }
+
+    await failChallengeRequest(c.env.DB, challengeId, now)
+    const status = deliveryError.kind === 'provider_rate_limited' || deliveryError.kind === 'provider_unavailable'
+      ? 503
+      : 502
+    const code = deliveryError.kind === 'provider_rate_limited'
+      ? 'EMAIL_PROVIDER_BUSY'
+      : deliveryError.kind === 'provider_unavailable'
+        ? 'EMAIL_PROVIDER_UNAVAILABLE'
+        : 'EMAIL_DELIVERY_FAILED'
     console.warn(JSON.stringify({
       event: 'auth_email_delivery_failed',
       request_id: requestId,
-      reason: deliveryError?.kind || 'network_or_unexpected_failure',
-      ...(deliveryError?.providerStatus ? { provider_status: deliveryError.providerStatus } : {}),
-      ...(deliveryError?.providerErrorName ? { provider_error_name: deliveryError.providerErrorName } : {}),
-      ...(deliveryError?.providerDetail ? { provider_detail: deliveryError.providerDetail } : {}),
+      reason: deliveryError.kind,
+      ...(deliveryError.providerStatus ? { provider_status: deliveryError.providerStatus } : {}),
+      ...(deliveryError.providerErrorName ? { provider_error_name: deliveryError.providerErrorName } : {}),
+      ...(deliveryError.providerDetail ? { provider_detail: deliveryError.providerDetail } : {}),
       ...(getSenderDomain(c.env.EMAIL_FROM) ? { sender_domain: getSenderDomain(c.env.EMAIL_FROM) } : {}),
     }))
     return challengeError(c, status, requestId, code, 'We could not send a sign-in code. Please retry shortly.', cooldown)
   }
-
-  return c.json({
-    data: {
-      challenge_id: challengeId,
-      expires_at: expiresAt,
-      resend_after: cooldown,
-      message: 'If this email can receive Joblite sign-in codes, one has been sent.',
-    },
-  })
 })
 
 app.post('/verify', async (c) => {
@@ -358,7 +446,7 @@ function classifyProviderError(message: unknown): ProviderErrorDetail | undefine
 
 function challengeError(
   c: Context<AppContext>,
-  status: 400 | 429 | 502 | 503 | 504,
+  status: 400 | 409 | 410 | 429 | 502 | 503 | 504,
   requestId: string,
   code: string,
   message: string,
@@ -374,7 +462,93 @@ function challengeError(
   }, status)
 }
 
-async function deliverCode(env: AppContext['Bindings'], email: string, code: string): Promise<void> {
+async function findChallengeRequest(
+  db: D1Database,
+  idempotencyHash: string,
+  email: string
+): Promise<ChallengeRequestRow | null> {
+  return db.prepare(
+    `SELECT r.email_normalized, r.challenge_id, r.delivery_status, r.provider_message_id,
+            c.expires_at, c.consumed_at, r.created_at
+     FROM auth_challenge_requests r
+     JOIN auth_challenges c ON c.id = r.challenge_id
+     WHERE r.idempotency_hash = ? AND r.email_normalized = ?`
+  ).bind(idempotencyHash, email).first<ChallengeRequestRow>()
+}
+
+function respondToChallengeRequest(
+  c: Context<AppContext>,
+  request: ChallengeRequestRow,
+  requestId: string
+): Response {
+  const now = Math.floor(Date.now() / 1000)
+  const cooldown = Math.max(1, Number(c.env.AUTH_RESEND_COOLDOWN_SECONDS || DEFAULT_RESEND_SECONDS))
+  const retryAfter = Math.max(1, Math.min(cooldown, request.created_at + cooldown - now))
+  if (request.delivery_status === 'failed') {
+    return challengeError(c, 502, requestId, 'EMAIL_PROVIDER_REJECTED', 'The email provider did not accept this sign-in code. Wait before requesting another.', retryAfter)
+  }
+  if (request.consumed_at !== null || request.expires_at <= now) {
+    return challengeError(c, 410, requestId, 'CHALLENGE_UNAVAILABLE', 'This sign-in code is no longer active. Request a new code.')
+  }
+  return challengeResponse(
+    c,
+    requestId,
+    request.challenge_id,
+    request.expires_at,
+    retryAfter,
+    request.delivery_status === 'accepted' ? 'accepted' : 'unknown',
+    request.delivery_status === 'accepted' ? 200 : 202
+  )
+}
+
+function challengeResponse(
+  c: Context<AppContext>,
+  requestId: string,
+  challengeId: string,
+  expiresAt: number,
+  resendAfter: number,
+  deliveryStatus: 'accepted' | 'unknown',
+  status: 200 | 202 = 200
+): Response {
+  return c.json({
+    data: {
+      challenge_id: challengeId,
+      expires_at: expiresAt,
+      resend_after: resendAfter,
+      delivery_status: deliveryStatus,
+      message: deliveryStatus === 'accepted'
+        ? 'If this email can receive Joblite sign-in codes, one has been sent.'
+        : 'We could not confirm the email handoff. Check your inbox; retrying this request will not send another email.',
+    },
+  }, status)
+}
+
+async function acceptChallengeRequest(
+  db: D1Database,
+  challengeId: string,
+  providerMessageId?: string
+): Promise<void> {
+  const result = await db.prepare(
+    `UPDATE auth_challenge_requests
+     SET delivery_status = 'accepted', provider_message_id = ?
+     WHERE challenge_id = ? AND delivery_status = 'sending'`
+  ).bind(providerMessageId || null, challengeId).run()
+  if ((result.meta?.changes ?? 0) !== 1) throw new Error('challenge acceptance state was not updated')
+}
+
+async function failChallengeRequest(db: D1Database, challengeId: string, now: number): Promise<void> {
+  await db.batch([
+    db.prepare(
+      `UPDATE auth_challenge_requests SET delivery_status = 'failed'
+       WHERE challenge_id = ? AND delivery_status = 'sending'`
+    ).bind(challengeId),
+    db.prepare(
+      'UPDATE auth_challenges SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL'
+    ).bind(now, challengeId),
+  ])
+}
+
+async function deliverCode(env: AppContext['Bindings'], email: string, code: string): Promise<string | undefined> {
   const apiKey = env.EMAIL_API_KEY || env.RESEND_API_KEY
   if (!apiKey || !env.EMAIL_FROM) throw new EmailConfigurationError()
   const controller = new AbortController()
@@ -414,6 +588,10 @@ async function deliverCode(env: AppContext['Bindings'], email: string, code: str
         classifyProviderError(providerError?.message)
       )
     }
+    const providerResponse = await response.json().catch(() => null) as { id?: unknown } | null
+    return typeof providerResponse?.id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(providerResponse.id)
+      ? providerResponse.id
+      : undefined
   } finally {
     clearTimeout(timeout)
   }

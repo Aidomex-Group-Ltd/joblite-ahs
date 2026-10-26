@@ -1,6 +1,20 @@
 # Implementation Status - Joblite AHS
 
-Last updated: 2026-10-24
+Last updated: 2026-10-26
+
+## Signup challenge handoff follow-up (2026-10-26)
+- [x] Reduced signup account creation to the required Terms of Service / Privacy Policy acknowledgment; age and marketing controls are no longer separate required signup checkboxes.
+- [x] Persisted hashed-code challenges before contacting Resend, added email-scoped HMAC idempotency records, and made duplicate retries return the same usable challenge without sending another message.
+- [x] Reported provider acceptance separately from unknown delivery outcomes; timeouts/network failures and post-acceptance D1 update failures return recoverable challenge metadata without automatic resend.
+- [x] Added redacted request/phase diagnostics, browser retry/refresh recovery, and mocked Resend/idempotency/session regressions.
+
+**Historical incident evidence:** The original production challenge request returned HTTP 500 after the designated inbox received its email, but the historical Worker event/request ID is unavailable. The previous challenge handler had no post-provider D1 state update, so the exact operation that threw cannot be confirmed from retained evidence. The incident's root cause therefore remains unconfirmed; the changes above address response-stage and retry ambiguity without claiming to identify the original exception. No production verification email was sent during this follow-up.
+
+**Verification:** `npm run typecheck`, `npm run lint`, `npm test` (55 tests), `npm run e2e -- --workers=1` (6 tests), `npm run build`, and `git diff --check` passed. A first E2E run hit the default 15-second URL assertion timeout after the onboarding update returned HTTP 200 in 16.2 seconds; the assertion timeout was raised to 45 seconds without changing the expected destination, and the full serial suite passed.
+
+**Migration:** Reviewed and applied additive migration `0009_auth_challenge_idempotency.sql` to production D1. Wrangler reports no pending migrations; remote schema inspection confirms the expected columns, unique constraints, cascading foreign key to `auth_challenges(id)`, and `idx_auth_challenge_requests_email_created`.
+
+**Release:** Commit, push, deployment, and production smoke checks pending. The production test-mail endpoint remains gated by both `ENVIRONMENT === 'test'` and `TEST_MAIL_SINK === 'enabled'`; production configuration sets `ENVIRONMENT = "production"` and does not enable the sink. No production verification email was sent. Live email delivery, verification, and authenticated-session confirmation remain pending explicit authorization.
 
 ## Shared Joblite theme and passwordless account flow (2026-10-24)
 - [x] Reused the homepage's Joblite AHS mark, blue/navy palette, Inter typography, spacing, and card treatment as shared global theme tokens and responsive navigation.

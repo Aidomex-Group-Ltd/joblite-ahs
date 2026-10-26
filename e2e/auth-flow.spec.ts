@@ -8,7 +8,6 @@ test('new signup, session persistence, logout, and returning-user login', async 
   await page.getByLabel('Full name').fill('E2E Auth Candidate')
   await page.getByLabel('Email address').fill(email)
   await page.getByLabel(/By creating an account, you agree to Joblite’s/).check()
-  await page.getByLabel(/I confirm that I am at least 18/).check()
   await page.getByRole('button', { name: 'Create account' }).click()
 
   await expect(page.getByRole('heading', { name: 'Enter your verification code' })).toBeVisible({ timeout: 45000 })

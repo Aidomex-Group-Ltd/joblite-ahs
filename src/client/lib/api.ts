@@ -53,7 +53,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<ApiEnve
       typeof error?.message === 'string' ? error.message : `Request failed with status ${response.status}`,
       error?.fields,
       typeof error?.retry_after === 'number' ? error.retry_after : undefined,
-      typeof error?.request_id === 'string' ? error.request_id : undefined
+      typeof error?.request_id === 'string'
+        ? error.request_id
+        : response.headers.get('X-Request-ID') || undefined
     )
   }
 

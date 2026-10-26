@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Hono } from 'hono'
+import { nanoid } from 'nanoid'
 import type { Env } from '../src/worker/types'
 import authRoute from '../src/worker/routes/auth'
 import meRoute from '../src/worker/routes/me'
@@ -19,8 +20,8 @@ describe('passwordless email authentication', () => {
   beforeEach(() => { const test = createTestEnv(); env = test.env; db = test.d1; close = test.close; env.TEST_MAIL_SINK = 'enabled' })
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); close() })
 
-  async function requestCode(email = 'person@example.test') {
-    const response = await api(env)('/auth/challenges', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) })
+  async function requestCode(email = 'person@example.test', idempotencyKey = nanoid(24)) {
+    const response = await api(env)('/auth/challenges', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, idempotency_key: idempotencyKey }) })
     return { response, payload: await response.json() as any }
   }
   async function readCode(email: string) {
@@ -186,6 +187,7 @@ describe('passwordless email authentication', () => {
     env.TEST_MAIL_SINK = undefined
     env.RESEND_API_KEY = 'test-resend-key'
     env.EMAIL_FROM = 'Joblite <auth@example.test>'
+    let deliveredCode = ''
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       expect(init?.method).toBe('POST')
       expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer test-resend-key')
@@ -193,15 +195,96 @@ describe('passwordless email authentication', () => {
       expect(payload.from).toBe('Joblite <auth@example.test>')
       expect(payload.to).toEqual(['person@example.test'])
       expect(payload.text).toMatch(/\d{6}/)
+      deliveredCode = payload.text.match(/\b\d{6}\b/)?.[0] || ''
       return new Response(JSON.stringify({ id: 'resend-message-id' }), { status: 200 })
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const { response, payload } = await requestCode()
+    const key = nanoid(24)
+    const { response, payload } = await requestCode('person@example.test', key)
     expect(response.status).toBe(200)
     expect(response.headers.get('X-Request-ID')).toBeTruthy()
     expect(payload.data.challenge_id).toBeTruthy()
+    expect(payload.data.expires_at).toBeGreaterThan(Math.floor(Date.now() / 1000))
+    expect(payload.data.delivery_status).toBe('accepted')
+    expect(payload.data.code).toBeUndefined()
     expect(fetchMock).toHaveBeenCalledOnce()
+    expect(await db.prepare('SELECT provider_message_id FROM auth_challenge_requests WHERE challenge_id = ?')
+      .bind(payload.data.challenge_id).first()).toEqual({ provider_message_id: 'resend-message-id' })
+
+    const duplicate = await requestCode('person@example.test', key)
+    expect(duplicate.response.status).toBe(200)
+    expect(duplicate.payload.data.challenge_id).toBe(payload.data.challenge_id)
+    expect(fetchMock).toHaveBeenCalledOnce()
+
+    const verified = await verifyCode(payload.data.challenge_id, deliveredCode)
+    expect(verified.status).toBe(200)
+    expect(verified.headers.get('set-cookie')).toContain('joblite_session=')
+    expect((await api(env)('/me', { headers: { Cookie: verified.headers.get('set-cookie')!.split(';', 1)[0] } })).status).toBe(200)
+  })
+
+  it('returns the existing challenge after Resend acceptance if the acceptance-state write fails', async () => {
+    env.TEST_MAIL_SINK = undefined
+    env.RESEND_API_KEY = 'test-resend-key'
+    env.EMAIL_FROM = 'Joblite <auth@example.test>'
+    let deliveredCode = ''
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const payload = JSON.parse(String(init?.body)) as { text: string }
+      deliveredCode = payload.text.match(/\b\d{6}\b/)?.[0] || ''
+      return new Response(JSON.stringify({ id: 'accepted-before-d1-failure' }), { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    db.failNextRunMatching = "SET delivery_status = 'accepted'"
+    const key = nanoid(24)
+
+    const first = await requestCode('recovery@example.test', key)
+    expect(first.response.status).toBe(202)
+    expect(first.payload.data.delivery_status).toBe('unknown')
+    expect(first.payload.data.challenge_id).toBeTruthy()
+    expect(first.payload.data.code).toBeUndefined()
+
+    const retry = await requestCode('recovery@example.test', key)
+    expect(retry.response.status).toBe(202)
+    expect(retry.payload.data.challenge_id).toBe(first.payload.data.challenge_id)
+    expect(fetchMock).toHaveBeenCalledOnce()
+
+    const verified = await verifyCode(first.payload.data.challenge_id, deliveredCode)
+    expect(verified.status).toBe(200)
+    expect(verified.headers.get('set-cookie')).toContain('joblite_session=')
+  })
+
+  it('does not send another email for concurrent retries with the same idempotency key', async () => {
+    env.TEST_MAIL_SINK = undefined
+    env.RESEND_API_KEY = 'test-resend-key'
+    env.EMAIL_FROM = 'Joblite <auth@example.test>'
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 'one-message' }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const key = nanoid(24)
+
+    const responses = await Promise.all([
+      requestCode('concurrent-request@example.test', key),
+      requestCode('concurrent-request@example.test', key),
+    ])
+    expect(responses.every(({ response }) => response.status === 200 || response.status === 202)).toBe(true)
+    expect(responses[0].payload.data.challenge_id).toBe(responses[1].payload.data.challenge_id)
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('invalidates a challenge rejected by Resend and does not resend an idempotent retry', async () => {
+    env.TEST_MAIL_SINK = undefined
+    env.RESEND_API_KEY = 'test-resend-key'
+    env.EMAIL_FROM = 'Joblite <auth@example.test>'
+    const fetchMock = vi.fn(async () => new Response('rejected', { status: 422 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const key = nanoid(24)
+
+    const first = await requestCode('rejected@example.test', key)
+    expect(first.response.status).toBe(502)
+    expect(first.payload.error.code).toBe('EMAIL_DELIVERY_FAILED')
+    expect((await requestCode('rejected@example.test', key)).response.status).toBe(502)
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(await db.prepare('SELECT delivery_status FROM auth_challenge_requests WHERE email_normalized = ?')
+      .bind('rejected@example.test').first()).toEqual({ delivery_status: 'failed' })
   })
 
   it.each([
@@ -255,46 +338,53 @@ describe('passwordless email authentication', () => {
     expect(JSON.stringify(log)).not.toContain('not verified for recipient')
   })
 
-  it('returns a retryable timeout without leaving a usable code challenge', async () => {
+  it('returns the persisted challenge after an ambiguous Resend timeout without resending', async () => {
     env.TEST_MAIL_SINK = undefined
     env.EMAIL_API_KEY = 'test-resend-key'
     env.EMAIL_FROM = 'Joblite <auth@example.test>'
-    vi.stubGlobal('fetch', vi.fn(async () => { throw new DOMException('Aborted', 'AbortError') }))
+    const fetchMock = vi.fn(async () => { throw new DOMException('Aborted', 'AbortError') })
+    vi.stubGlobal('fetch', fetchMock)
 
-    const { response, payload } = await requestCode('timeout@example.test')
-    expect(response.status).toBe(504)
-    expect(payload.error.code).toBe('EMAIL_DELIVERY_TIMEOUT')
-    expect(payload.error.retry_after).toBeGreaterThan(0)
+    const key = nanoid(24)
+    const { response, payload } = await requestCode('timeout@example.test', key)
+    expect(response.status).toBe(202)
+    expect(payload.data.delivery_status).toBe('unknown')
+    const retry = await requestCode('timeout@example.test', key)
+    expect(retry.response.status).toBe(202)
+    expect(retry.payload.data.challenge_id).toBe(payload.data.challenge_id)
+    expect(fetchMock).toHaveBeenCalledOnce()
     const challenge = await db.prepare('SELECT consumed_at FROM auth_challenges WHERE email_normalized = ?').bind('timeout@example.test').first<{ consumed_at: number | null }>()
-    expect(challenge?.consumed_at).toBeTruthy()
+    expect(challenge?.consumed_at).toBeNull()
   })
 
-  it('does not report success or preserve a challenge after Resend network failure', async () => {
+  it('keeps a usable challenge after a network failure with an unknown delivery outcome', async () => {
     env.TEST_MAIL_SINK = undefined
     env.EMAIL_API_KEY = 'test-resend-key'
     env.EMAIL_FROM = 'Joblite <auth@example.test>'
-    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network unavailable') }))
+    const fetchMock = vi.fn(async () => { throw new TypeError('network unavailable') })
+    vi.stubGlobal('fetch', fetchMock)
 
-    const { response, payload } = await requestCode('network@example.test')
-    expect(response.status).toBe(502)
-    expect(payload.error.code).toBe('EMAIL_DELIVERY_FAILED')
-    expect(payload.data).toBeUndefined()
+    const key = nanoid(24)
+    const { response, payload } = await requestCode('network@example.test', key)
+    expect(response.status).toBe(202)
+    expect(payload.data.delivery_status).toBe('unknown')
     const challenge = await db.prepare('SELECT consumed_at FROM auth_challenges WHERE email_normalized = ?').bind('network@example.test').first<{ consumed_at: number | null }>()
-    expect(challenge?.consumed_at).toBeTruthy()
+    expect(challenge?.consumed_at).toBeNull()
+    expect(fetchMock).toHaveBeenCalledOnce()
   })
 
-  it('allows a new challenge after delivery failure cooldown has elapsed', async () => {
+  it('allows a new challenge after an ambiguous delivery cooldown has elapsed', async () => {
     env.TEST_MAIL_SINK = undefined
     env.EMAIL_API_KEY = 'test-resend-key'
     env.EMAIL_FROM = 'Joblite <auth@example.test>'
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network unavailable') }))
 
     const failed = await requestCode('retry@example.test')
-    expect(failed.response.status).toBe(502)
+    expect(failed.response.status).toBe(202)
     const failedChallenge = await db.prepare(
       'SELECT id, consumed_at FROM auth_challenges WHERE email_normalized = ? ORDER BY created_at DESC LIMIT 1'
     ).bind('retry@example.test').first<{ id: string; consumed_at: number | null }>()
-    expect(failedChallenge?.consumed_at).toBeTruthy()
+    expect(failedChallenge?.consumed_at).toBeNull()
 
     await db.prepare('UPDATE auth_challenges SET created_at = created_at - 120 WHERE email_normalized = ?')
       .bind('retry@example.test').run()

@@ -5,6 +5,62 @@ import { useSession } from '../lib/session'
 import { safeInternalPath } from '../components/AuthExperience'
 import { CURRENT_TERMS_VERSION } from '../../shared/legal-versions'
 
+const SIGNUP_CHALLENGE_STORAGE_KEY = 'joblite:signup-challenge'
+const SIGNUP_REQUEST_STORAGE_KEY = 'joblite:signup-request'
+
+type StoredSignupChallenge = {
+  email: string
+  name: string
+  challengeId: string
+  expiresAt: number
+  resendAfter: number
+  idempotencyKey: string
+}
+
+type ChallengeResponse = {
+  challenge_id: string
+  expires_at: number
+  resend_after: number
+  delivery_status: 'accepted' | 'unknown'
+  message: string
+}
+
+function isChallengeResponse(value: unknown): value is ChallengeResponse {
+  if (!value || typeof value !== 'object') return false
+  const response = value as Record<string, unknown>
+  return typeof response.challenge_id === 'string'
+    && typeof response.expires_at === 'number'
+    && typeof response.resend_after === 'number'
+    && (response.delivery_status === 'accepted' || response.delivery_status === 'unknown')
+    && typeof response.message === 'string'
+}
+
+function readStoredSignupChallenge(): StoredSignupChallenge | null {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(SIGNUP_CHALLENGE_STORAGE_KEY) || 'null')
+    if (
+      value && typeof value.email === 'string' && typeof value.name === 'string'
+      && typeof value.challengeId === 'string' && typeof value.expiresAt === 'number'
+      && typeof value.resendAfter === 'number' && typeof value.idempotencyKey === 'string'
+    ) return value as StoredSignupChallenge
+  } catch {
+    return null
+  }
+  return null
+}
+
+function createIdempotencyKey(): string {
+  return crypto.randomUUID()
+}
+
+function storeRequestKey(email: string, key: string): void {
+  try {
+    sessionStorage.setItem(SIGNUP_REQUEST_STORAGE_KEY, JSON.stringify({ email, key }))
+  } catch {
+    // In-memory state still protects retries until the page is closed.
+  }
+}
+
 async function legalContext() {
   let region = localStorage.getItem('joblite:legal-region') || ''
   if (!region) {
@@ -23,23 +79,44 @@ export default function SignUp() {
   const session = useSession()
   const nextTarget = safeInternalPath(params.get('next'))
 
-  const [name, setName] = useState('')
-  const [email, setEmail] = useState('')
+  const [initialChallenge] = useState(readStoredSignupChallenge)
+  const [name, setName] = useState(initialChallenge?.name || '')
+  const [email, setEmail] = useState(initialChallenge?.email || '')
   const [termsAccepted, setTermsAccepted] = useState(false)
-  const [ageConfirmed, setAgeConfirmed] = useState(false)
-  const [marketingConsent, setMarketingConsent] = useState(false)
 
-  const [stage, setStage] = useState<'form' | 'verify'>('form')
-  const [challengeId, setChallengeId] = useState('')
+  const [stage, setStage] = useState<'form' | 'verify'>(
+    initialChallenge && initialChallenge.expiresAt > Math.floor(Date.now() / 1000) ? 'verify' : 'form'
+  )
+  const [challengeId, setChallengeId] = useState(initialChallenge?.challengeId || '')
   const [code, setCode] = useState('')
-  const [resendIn, setResendIn] = useState(0)
-  const [cooldownEmail, setCooldownEmail] = useState('')
+  const [resendIn, setResendIn] = useState(initialChallenge?.resendAfter || 0)
+  const [cooldownEmail, setCooldownEmail] = useState(initialChallenge?.email || '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
   const codeInputRef = useRef<HTMLInputElement>(null)
+  const requestKeyRef = useRef<{ email: string; key: string } | null>(null)
   const activeResendIn = cooldownEmail === email.trim().toLowerCase() ? resendIn : 0
+
+  function requestKeyFor(normalizedEmail: string, rotate = false): string {
+    if (!rotate && requestKeyRef.current?.email === normalizedEmail) return requestKeyRef.current.key
+    if (!rotate) {
+      try {
+        const stored = JSON.parse(sessionStorage.getItem(SIGNUP_REQUEST_STORAGE_KEY) || 'null')
+        if (stored?.email === normalizedEmail && typeof stored.key === 'string') {
+          requestKeyRef.current = { email: normalizedEmail, key: stored.key }
+          return stored.key
+        }
+      } catch {
+        // Fall through to a new in-memory key.
+      }
+    }
+    const key = createIdempotencyKey()
+    requestKeyRef.current = { email: normalizedEmail, key }
+    storeRequestKey(normalizedEmail, key)
+    return key
+  }
 
   function displayError(caught: unknown): string {
     const message = errorMessage(caught)
@@ -85,11 +162,7 @@ export default function SignUp() {
       return
     }
     if (!termsAccepted) {
-      setError('You must agree to the Terms of Service to create an account.')
-      return
-    }
-    if (!ageConfirmed) {
-      setError('You must confirm that you are at least 18 years old.')
+      setError('Accept the Terms of Service and Privacy Policy to create an account.')
       return
     }
 
@@ -99,21 +172,53 @@ export default function SignUp() {
 
     try {
       const legal = await legalContext()
-      const res = await apiPost<{ challenge_id: string; resend_after: number }>('/auth/challenges', {
+      const idempotencyKey = requestKeyFor(trimmedEmail)
+      const res = await apiPost<ChallengeResponse>('/auth/challenges', {
         email: trimmedEmail,
+        idempotency_key: idempotencyKey,
         ...legal,
       })
+      if (!isChallengeResponse(res.data)) {
+        throw new ApiError(502, 'AUTH_RESPONSE_INVALID', 'We could not confirm the challenge response. Retry after the timer to safely check this request.')
+      }
       setChallengeId(res.data.challenge_id)
       setResendIn(res.data.resend_after || 60)
       setCooldownEmail(trimmedEmail)
       setStage('verify')
-      setNotice(`We sent a 6-digit verification code to ${trimmedEmail}.`)
+      setNotice(res.data.delivery_status === 'accepted'
+        ? `The email provider accepted the request for ${trimmedEmail}. Check your inbox; delivery is not confirmed.`
+        : `${res.data.message} You can enter the code if it arrives; retrying will safely check this request without sending another email.`)
+      try {
+        sessionStorage.setItem(SIGNUP_CHALLENGE_STORAGE_KEY, JSON.stringify({
+          email: trimmedEmail,
+          name: trimmedName,
+          challengeId: res.data.challenge_id,
+          expiresAt: res.data.expires_at,
+          resendAfter: res.data.resend_after || 60,
+          idempotencyKey,
+        } satisfies StoredSignupChallenge))
+      } catch {
+        // The active challenge remains available in memory.
+      }
     } catch (caught) {
-      if (caught instanceof ApiError && caught.retryAfter) {
+      const ambiguous = !(caught instanceof ApiError)
+        || caught.status === 0 || (caught.status >= 500 && !caught.code.startsWith('EMAIL_'))
+        || ['INTERNAL', 'AUTH_RESPONSE_INVALID'].includes(caught.code)
+      if (ambiguous) {
+        setResendIn(caught instanceof ApiError && caught.retryAfter ? caught.retryAfter : 60)
+        setCooldownEmail(trimmedEmail)
+        setError('We could not confirm whether your request completed. Check your inbox. After the timer, retrying with this browser session will safely check the same request without sending a duplicate email.')
+      } else if (caught instanceof ApiError && caught.retryAfter) {
         setResendIn(caught.retryAfter)
         setCooldownEmail(trimmedEmail)
+        setError(displayError(caught))
+        if (caught.code.startsWith('EMAIL_')) {
+          requestKeyRef.current = null
+          try { sessionStorage.removeItem(SIGNUP_REQUEST_STORAGE_KEY) } catch { /* Optional browser storage. */ }
+        }
+      } else {
+        setError(displayError(caught))
       }
-      setError(displayError(caught))
     } finally {
       setBusy(false)
     }
@@ -139,11 +244,18 @@ export default function SignUp() {
         terms_accepted: true,
         terms_version: CURRENT_TERMS_VERSION,
         age_confirmed: true,
-        marketing_consent: marketingConsent,
+        marketing_consent: false,
         display_name: name.trim(),
       })
 
       await session.refresh()
+      try {
+        sessionStorage.removeItem(SIGNUP_CHALLENGE_STORAGE_KEY)
+        sessionStorage.removeItem(SIGNUP_REQUEST_STORAGE_KEY)
+      } catch {
+        // Session creation does not depend on browser storage.
+      }
+      requestKeyRef.current = null
       navigate(`/onboarding?next=${encodeURIComponent(nextTarget)}`, { replace: true })
     } catch (caught) {
       setError(displayError(caught))
@@ -159,22 +271,47 @@ export default function SignUp() {
     setNotice('')
     try {
       const legal = await legalContext()
-      const res = await apiPost<{ challenge_id: string; resend_after: number }>('/auth/challenges', {
-        email: email.trim().toLowerCase(),
+      const normalizedEmail = email.trim().toLowerCase()
+      const idempotencyKey = requestKeyFor(normalizedEmail, true)
+      const res = await apiPost<ChallengeResponse>('/auth/challenges', {
+        email: normalizedEmail,
+        idempotency_key: idempotencyKey,
         ...legal,
       })
+      if (!isChallengeResponse(res.data)) {
+        throw new ApiError(502, 'AUTH_RESPONSE_INVALID', 'We could not confirm the challenge response. Check your inbox and do not resend automatically.')
+      }
       setChallengeId(res.data.challenge_id)
       setResendIn(res.data.resend_after || 60)
-      setCooldownEmail(email.trim().toLowerCase())
+      setCooldownEmail(normalizedEmail)
       setCode('')
-      setNotice('A fresh verification code was sent to your email.')
+      setNotice(res.data.delivery_status === 'accepted'
+        ? 'The email provider accepted the request. Check your inbox for the fresh verification code; delivery is not confirmed.'
+        : `${res.data.message} You can enter the code if it arrives.`)
+      try {
+        sessionStorage.setItem(SIGNUP_CHALLENGE_STORAGE_KEY, JSON.stringify({
+          email: normalizedEmail,
+          name,
+          challengeId: res.data.challenge_id,
+          expiresAt: res.data.expires_at,
+          resendAfter: res.data.resend_after || 60,
+          idempotencyKey,
+        } satisfies StoredSignupChallenge))
+      } catch {
+        // The active challenge remains available in memory.
+      }
     } catch (caught) {
       const rateLimited = caught instanceof ApiError && ['RESEND_COOLDOWN', 'RATE_LIMITED'].includes(caught.code)
       if (caught instanceof ApiError && caught.retryAfter) {
         setResendIn(caught.retryAfter)
         setCooldownEmail(email.trim().toLowerCase())
       }
-      if (!rateLimited) {
+      const ambiguous = !(caught instanceof ApiError)
+        || caught.status === 0 || caught.status >= 500
+        || ['INTERNAL', 'AUTH_RESPONSE_INVALID'].includes(caught.code)
+      if (ambiguous) {
+        setError('We could not confirm whether this request completed. Check your inbox; do not resend automatically.')
+      } else if (!rateLimited) {
         setChallengeId('')
         setCode('')
         setStage('form')
@@ -256,31 +393,6 @@ export default function SignUp() {
                 </small>
               </div>
 
-              <div className="jl-signup-consent-group">
-                <label className="jl-consent-item">
-                  <input
-                    type="checkbox"
-                    required
-                    checked={ageConfirmed}
-                    onChange={(e) => setAgeConfirmed(e.target.checked)}
-                    disabled={busy}
-                  />
-                  <span>I confirm that I am at least 18 years old.</span>
-                </label>
-
-                <label className="jl-consent-item">
-                  <input
-                    type="checkbox"
-                    checked={marketingConsent}
-                    onChange={(e) => setMarketingConsent(e.target.checked)}
-                    disabled={busy}
-                  />
-                  <span>
-                    Email me optional Joblite job recommendations and product updates. (Optional, can be changed anytime in settings).
-                  </span>
-                </label>
-              </div>
-
               <label className="jl-consent-item jl-signup-legal-notice">
                 <input
                   type="checkbox"
@@ -326,7 +438,7 @@ export default function SignUp() {
               <div className="jl-verification-intro">
                 <h3>Enter your verification code</h3>
                 <p className="muted">
-                  We sent a 6-digit code to <strong>{email}</strong>. It expires in 10 minutes.
+                  Check your inbox for a 6-digit code sent to <strong>{email}</strong>. It expires in 10 minutes.
                 </p>
               </div>
 

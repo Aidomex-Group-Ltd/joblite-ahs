@@ -10,6 +10,24 @@ type AuthRequest = { intent?: string; jobId?: string; nextPath?: string }
 type AuthContextValue = { openAuth: (request?: AuthRequest) => void; closeAuth: () => void }
 const AuthContext = createContext<AuthContextValue | null>(null)
 const validIntents = new Set<Intent>(['publish-post','apply-source','save','like','comment','notifications','profile','create-job','apply'])
+type ChallengeResponse = {
+  challenge_id: string
+  expires_at: number
+  resend_after: number
+  delivery_status: 'accepted' | 'unknown'
+  message: string
+}
+
+function isChallengeResponse(value: unknown): value is ChallengeResponse {
+  if (!value || typeof value !== 'object') return false
+  const response = value as Record<string, unknown>
+  return typeof response.challenge_id === 'string'
+    && typeof response.expires_at === 'number'
+    && typeof response.resend_after === 'number'
+    && (response.delivery_status === 'accepted' || response.delivery_status === 'unknown')
+    && typeof response.message === 'string'
+}
+
 async function legalContext() {
   let region = localStorage.getItem('joblite:legal-region') || ''
   if (!region) {
@@ -68,8 +86,6 @@ function AuthDialog({ request, onClose }: { request: AuthRequest; onClose: () =>
   const [destination, setDestination] = useState<{ url: string; source: string } | null>(null)
   const [termsRequired, setTermsRequired] = useState(false)
   const [termsAccepted, setTermsAccepted] = useState(false)
-  const [ageConfirmed, setAgeConfirmed] = useState(false)
-  const [marketingConsent, setMarketingConsent] = useState(false)
   const [countries, setCountries] = useState<Array<{ code: string; name: string }>>([])
   const [accountType, setAccountType] = useState<'candidate' | 'employer' | 'both' | ''>('')
   const [displayName, setDisplayName] = useState('')
@@ -80,6 +96,7 @@ function AuthDialog({ request, onClose }: { request: AuthRequest; onClose: () =>
   const [organizationName, setOrganizationName] = useState('')
   const [employerTitle, setEmployerTitle] = useState('')
   const dialog = useRef<HTMLDivElement>(null)
+  const challengeRequest = useRef<{ email: string; key: string } | null>(null)
   const intent = (validIntents.has(request.intent as Intent) ? request.intent : undefined) as Intent | undefined
   const copy = intent === 'apply-source' ? 'Sign in to continue to the original job posting.' : intent === 'publish-post' ? 'Sign in to publish your post. Your draft stays on this device.' : intent === 'save' ? 'Sign in to save this opportunity to your account.' : 'Continue with email to access your Joblite account.'
 
@@ -111,11 +128,31 @@ function AuthDialog({ request, onClose }: { request: AuthRequest; onClose: () =>
     event.preventDefault(); if (busy) return
     setBusy(true); setError('')
     try {
-      const response = await apiPost<{ challenge_id: string; resend_after: number }>('/auth/challenges', { email, ...await legalContext() })
-      setChallenge(response.data.challenge_id); setResendIn(response.data.resend_after || 60); setStage('code')
+      const normalizedEmail = email.trim().toLowerCase()
+      if (!challengeRequest.current || challengeRequest.current.email !== normalizedEmail) {
+        challengeRequest.current = { email: normalizedEmail, key: crypto.randomUUID() }
+      }
+      const response = await apiPost<ChallengeResponse>('/auth/challenges', {
+        email: normalizedEmail,
+        idempotency_key: challengeRequest.current.key,
+        ...await legalContext(),
+      })
+      if (!isChallengeResponse(response.data)) {
+        throw new ApiError(502, 'AUTH_RESPONSE_INVALID', 'We could not confirm the challenge response. Retry after the timer to safely check this request.')
+      }
+      setChallenge(response.data.challenge_id)
+      setResendIn(response.data.resend_after || 60)
+      setStage('code')
+      if (response.data.delivery_status === 'unknown') setError(response.data.message)
     } catch (cause) {
       if (cause instanceof ApiError && cause.retryAfter) setResendIn(cause.retryAfter)
-      setError(cause instanceof ApiError && cause.requestId ? `${errorMessage(cause)} (Reference: ${cause.requestId})` : errorMessage(cause))
+      const ambiguous = !(cause instanceof ApiError) || cause.status === 0 || (cause.status >= 500 && !cause.code.startsWith('EMAIL_'))
+        || ['INTERNAL', 'AUTH_RESPONSE_INVALID'].includes(cause.code)
+      if (!ambiguous && cause instanceof ApiError && cause.code.startsWith('EMAIL_')) challengeRequest.current = null
+      setError(ambiguous
+        ? 'We could not confirm whether your request completed. Check your inbox. Retry after the timer to safely check this request without sending another email.'
+        : cause instanceof ApiError && cause.requestId ? `${errorMessage(cause)} (Reference: ${cause.requestId})` : errorMessage(cause))
+      if (ambiguous && !(cause instanceof ApiError && cause.retryAfter)) setResendIn(60)
     } finally { setBusy(false) }
   }
   async function verify(event: React.FormEvent) {
@@ -126,9 +163,9 @@ function AuthDialog({ request, onClose }: { request: AuthRequest; onClose: () =>
         challenge_id: challenge,
         code,
         terms_accepted: termsAccepted,
-        age_confirmed: ageConfirmed,
+        age_confirmed: termsAccepted,
         terms_version: CURRENT_TERMS_VERSION,
-        marketing_consent: marketingConsent,
+        marketing_consent: false,
         onboarding: {
           account_type: accountType,
           display_name: displayName,
@@ -150,15 +187,36 @@ function AuthDialog({ request, onClose }: { request: AuthRequest; onClose: () =>
   async function resend() {
     if (busy) return
     setBusy(true); setError('')
-    try { const response = await apiPost<{ challenge_id: string; resend_after: number }>('/auth/challenges', { email, ...await legalContext() }); setChallenge(response.data.challenge_id); setResendIn(response.data.resend_after || 60); setCode('') }
+    try {
+      const normalizedEmail = email.trim().toLowerCase()
+      challengeRequest.current = { email: normalizedEmail, key: crypto.randomUUID() }
+      const response = await apiPost<ChallengeResponse>('/auth/challenges', {
+        email: normalizedEmail,
+        idempotency_key: challengeRequest.current.key,
+        ...await legalContext(),
+      })
+      if (!isChallengeResponse(response.data)) {
+        throw new ApiError(502, 'AUTH_RESPONSE_INVALID', 'We could not confirm the challenge response. Check your inbox and do not resend automatically.')
+      }
+      setChallenge(response.data.challenge_id); setResendIn(response.data.resend_after || 60); setCode('')
+      if (response.data.delivery_status === 'unknown') setError(response.data.message)
+    }
     catch (cause) {
       if (cause instanceof ApiError && cause.retryAfter) setResendIn(cause.retryAfter)
+      const ambiguous = !(cause instanceof ApiError) || cause.status === 0 || (cause.status >= 500 && !cause.code.startsWith('EMAIL_'))
+        || ['INTERNAL', 'AUTH_RESPONSE_INVALID'].includes(cause.code)
       if (!(cause instanceof ApiError && ['RESEND_COOLDOWN', 'RATE_LIMITED'].includes(cause.code))) {
-        setChallenge('')
-        setCode('')
-        setStage('email')
+        if (!ambiguous) {
+          if (cause instanceof ApiError && cause.code.startsWith('EMAIL_')) challengeRequest.current = null
+          setChallenge('')
+          setCode('')
+          setStage('email')
+        } else {
+          setError('We could not confirm whether this request completed. Check your inbox; do not resend automatically.')
+          if (!(cause instanceof ApiError && cause.retryAfter)) setResendIn(60)
+        }
       }
-      setError(cause instanceof ApiError && cause.requestId ? `${errorMessage(cause)} (Reference: ${cause.requestId})` : errorMessage(cause))
+      if (!ambiguous) setError(cause instanceof ApiError && cause.requestId ? `${errorMessage(cause)} (Reference: ${cause.requestId})` : errorMessage(cause))
     } finally { setBusy(false) }
   }
   const isCandidate = accountType === 'candidate' || accountType === 'both'
@@ -179,7 +237,7 @@ function AuthDialog({ request, onClose }: { request: AuthRequest; onClose: () =>
       <header><JobliteBrand /><button className="jl-auth-close" type="button" onClick={onClose} aria-label="Close sign in">×</button></header>
       {session.user && intent === 'apply-source' ? <div className="jl-auth-body"><h1 id="jl-auth-title">Continue to the job</h1><p>{error || (destination ? `You’re signed in. Continue to ${destination.source}; this opens an external website.` : 'Checking the original job link…')}</p>{destination && <a className="btn jl-auth-submit" href={destination.url} target="_blank" rel="noopener noreferrer" onClick={onClose}>Continue to {destination.source} ↗</a>}</div> : <div className="jl-auth-body">
         <h1 id="jl-auth-title">{termsRequired ? 'Set up your Joblite account' : stage === 'code' ? 'Check your email' : 'Welcome to Joblite'}</h1>
-        <p>{termsRequired ? 'Your email code is confirmed. Tell us whether you are looking for work, hiring, or both.' : stage === 'code' ? `Enter the six-digit code sent to ${email}.` : copy}</p>
+        <p>{termsRequired ? 'Your email code is confirmed. Tell us whether you are looking for work, hiring, or both.' : stage === 'code' ? `Check your inbox for a six-digit code requested for ${email}. Delivery is not confirmed.` : copy}</p>
         {stage === 'email' ? <form className="jl-auth-form" onSubmit={send}><label>Email address<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label><button className="btn jl-auth-submit" disabled={busy || resendIn > 0}>{busy ? 'Sending code…' : resendIn > 0 ? `Try again in ${resendIn}s` : 'Continue with email'}</button></form> : <form className="jl-auth-form" onSubmit={verify}>
           <label>Verification code<input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9 ]{6,8}" maxLength={8} required value={code} onChange={(event) => setCode(event.target.value.replace(/[^0-9 ]/g, '').slice(0, 8))} placeholder="123456" /></label>
           {termsRequired ? <div className="jl-onboarding-step">
@@ -193,9 +251,9 @@ function AuthDialog({ request, onClose }: { request: AuthRequest; onClose: () =>
             </fieldset>
             {isCandidate && <div className="jl-onboarding-fields"><label>Role or kind of work you’re looking for<input autoComplete="organization-title" required maxLength={120} value={desiredRole} onChange={(event) => setDesiredRole(event.target.value)} placeholder="e.g. Product designer" /></label><label>Experience level <span className="jl-onboarding-optional">Optional</span><select value={experienceLevel} onChange={(event) => setExperienceLevel(event.target.value)}><option value="">Choose if you’d like</option><option value="student">Student or recent graduate</option><option value="entry">Early career</option><option value="mid">Experienced</option><option value="senior">Senior or lead</option><option value="executive">Executive</option><option value="career_change">Changing careers</option><option value="not_sure">Not sure yet</option></select></label></div>}
             {isEmployer && <div className="jl-onboarding-fields"><label>Company or organization name<input autoComplete="organization" required maxLength={120} value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} placeholder="Organization name" /></label><label>Your role there<input autoComplete="organization-title" required maxLength={100} value={employerTitle} onChange={(event) => setEmployerTitle(event.target.value)} placeholder="e.g. Recruiter or Founder" /></label><small className="jl-onboarding-note">The workspace will be marked unverified until your organization is reviewed.</small></div>}
-            <div className="jl-auth-legal-checks"><label><input type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} /> By creating an account, you agree to Joblite’s <Link to="/legal/terms" target="_blank" rel="noopener noreferrer">Terms of Service</Link> and acknowledge its <Link to="/legal/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</Link>.</label><label><input type="checkbox" checked={ageConfirmed} onChange={(event) => setAgeConfirmed(event.target.checked)} /> I confirm that I am at least 18. Joblite does not currently offer a parent or guardian consent process.</label><label><input type="checkbox" checked={marketingConsent} onChange={(event) => setMarketingConsent(event.target.checked)} /> Email me optional Joblite product updates. This is optional and can be withdrawn later.</label></div>
+            <div className="jl-auth-legal-checks"><label><input type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} /> By creating an account, you agree to Joblite’s <Link to="/legal/terms" target="_blank" rel="noopener noreferrer">Terms of Service</Link> and acknowledge its <Link to="/legal/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</Link>.</label></div>
           </div> : null}
-          <button className="btn jl-auth-submit" disabled={busy || code.replace(/\s/g,'').length !== 6 || (termsRequired && (!termsAccepted || !ageConfirmed || !onboardingReady))}>{busy ? termsRequired ? 'Creating account…' : 'Verifying…' : termsRequired ? 'Create my account' : 'Verify and continue'}</button>
+          <button className="btn jl-auth-submit" disabled={busy || code.replace(/\s/g,'').length !== 6 || (termsRequired && (!termsAccepted || !onboardingReady))}>{busy ? termsRequired ? 'Creating account…' : 'Verifying…' : termsRequired ? 'Create my account' : 'Verify and continue'}</button>
           <div className="jl-auth-links"><button type="button" onClick={() => { setStage('email'); setError('') }}>Change email</button><button type="button" disabled={busy || resendIn > 0} onClick={() => void resend()}>{resendIn > 0 ? `Resend in ${resendIn}s` : 'Resend code'}</button></div>
         </form>}
         {error && <p className="jl-auth-error" role="alert">{error}</p>}<p className="jl-auth-footnote">No password needed. If this email already has an account, its existing account will be signed in.</p>

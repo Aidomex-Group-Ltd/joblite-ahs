@@ -24,11 +24,12 @@ class BoundStatement {
   constructor(
     private readonly db: SqliteDatabase,
     private readonly sql: string,
-    private readonly params: unknown[] = []
+    private readonly params: unknown[] = [],
+    private readonly shouldFailRun: () => boolean = () => false
   ) {}
 
   bind(...params: unknown[]): BoundStatement {
-    return new BoundStatement(this.db, this.sql, params)
+    return new BoundStatement(this.db, this.sql, params, this.shouldFailRun)
   }
 
   async first<T = Record<string, unknown>>(): Promise<T | null> {
@@ -46,6 +47,7 @@ class BoundStatement {
   }
 
   async run(): Promise<{ results: unknown[]; success: true; meta: { changes: number; last_row_id: number } }> {
+    if (this.shouldFailRun()) throw new Error('injected D1 write failure')
     const result = this.db.prepare(this.sql).run(...this.params)
     return {
       results: [],
@@ -57,6 +59,7 @@ class BoundStatement {
 
 export class TestD1 {
   readonly db: SqliteDatabase
+  failNextRunMatching: string | null = null
 
   constructor(path = ':memory:') {
     this.db = new DatabaseSync(path)
@@ -64,7 +67,11 @@ export class TestD1 {
   }
 
   prepare(sql: string): BoundStatement {
-    return new BoundStatement(this.db, sql)
+    return new BoundStatement(this.db, sql, [], () => {
+      if (!this.failNextRunMatching || !sql.includes(this.failNextRunMatching)) return false
+      this.failNextRunMatching = null
+      return true
+    })
   }
 
   async batch(statements: BoundStatement[]): Promise<unknown[]> {
