@@ -6,6 +6,10 @@ type Message = { role: 'user' | 'assistant'; content: string }
 
 const MAX_INPUT_LENGTH = 800
 
+// The live support chat stays hidden until its inference provider is configured
+// and functional. Flip to true to restore the launcher once chat answers work.
+export const SUPPORT_CHAT_ENABLED = false
+
 export default function SupportChat() {
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])

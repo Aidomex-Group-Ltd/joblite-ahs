@@ -161,9 +161,14 @@ export function SiteFooter() {
   return <footer className="jl-global-footer"><span>© {new Date().getFullYear()} Aidomex Group Ltd · Joblite AHIS</span><nav aria-label="Legal and privacy links"><Link to="/legal">Legal Center</Link><Link to="/legal/terms">Terms</Link><Link to="/legal/privacy">Privacy</Link><Link to="/legal/cookies">Cookies</Link><Link to="/legal/privacy-rights">Privacy rights</Link></nav></footer>
 }
 
+function readPrivacyChoice(): string | null {
+  try { return localStorage.getItem('joblite:privacy-choice') } catch { return null }
+}
+
 export function PrivacyChoicesButton() {
-  const [open, setOpen] = useState(false)
-  const [saved, setSaved] = useState(Boolean(localStorage.getItem('joblite:privacy-choice')))
+  // Open automatically on app launch, then stay closed once a choice is recorded.
+  const [open, setOpen] = useState(() => !readPrivacyChoice())
+  const [saved, setSaved] = useState(Boolean(readPrivacyChoice()))
   const [customizing, setCustomizing] = useState(false)
   const dialogRef = useRef<HTMLElement | null>(null)
   const triggerRef = useRef<HTMLElement | null>(null)
