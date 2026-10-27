@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test'
+import { preRecordPrivacyChoice } from './helpers'
 
 test('guest browsing remains public while mobile ATS entry requires sign-in', async ({ page, request }) => {
+  await preRecordPrivacyChoice(page)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/jobs')
   await expect(page.getByPlaceholder('Search jobs, skills or companies')).toBeVisible()
@@ -19,6 +21,7 @@ test('guest browsing remains public while mobile ATS entry requires sign-in', as
 
 test('mobile email verification establishes the session before ATS access', async ({ page, request }) => {
   test.setTimeout(120000)
+  await preRecordPrivacyChoice(page)
   await page.setViewportSize({ width: 390, height: 844 })
   const email = `mobile-auth-${Date.now()}@joblite.test`
 

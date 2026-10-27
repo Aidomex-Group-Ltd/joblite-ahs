@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import { preRecordPrivacyChoice } from './helpers'
 
 const artifacts = join(process.cwd(), 'artifacts', 'screenshots')
 
@@ -21,6 +22,7 @@ test('guest application, passwordless verification, composer publishing, and med
   })
   page.on('response', (response) => { if (response.url().includes('/api/v1/') && response.status() >= 400) console.log(`API ${response.status()} ${response.url()}`) })
   await context.route('https://jobs.example.test/**', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>External fixture</title>' }))
+  await preRecordPrivacyChoice(page)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')
   await expect(page.getByRole('button', { name: 'Joblite AHIS home' })).toBeVisible()

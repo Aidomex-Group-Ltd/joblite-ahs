@@ -1,8 +1,10 @@
 import { expect, test } from '@playwright/test'
+import { preRecordPrivacyChoice } from './helpers'
 
 test.describe('Signup and Onboarding E2E Journey', () => {
   test('recovers from a retryable delivery error and completes signup after test-mail delivery resumes', async ({ page, request }) => {
     let failFirstRequest = true
+    await preRecordPrivacyChoice(page)
     await page.route('**/api/v1/auth/challenges', async (route) => {
       if (!failFirstRequest) {
         await route.continue()
@@ -55,6 +57,7 @@ test.describe('Signup and Onboarding E2E Journey', () => {
     const email = `pw-onboarding-${Date.now()}@joblite.test`
     const nextUrl = '/jobs?country=UG'
 
+    await preRecordPrivacyChoice(page)
     // 1. Visit /signup with a safe return path
     await page.goto(`/signup?next=${encodeURIComponent(nextUrl)}`)
     await expect(page.getByRole('heading', { name: 'Find your next opportunity.' })).toBeVisible()
@@ -173,6 +176,7 @@ test.describe('Signup and Onboarding E2E Journey', () => {
     test.setTimeout(120000)
     const email = 'pw-skip@joblite.test'
 
+    await preRecordPrivacyChoice(page)
     // Signup
     await page.goto('/signup')
     await page.getByLabel('Full name').fill('Skip Tester')
@@ -204,6 +208,7 @@ test.describe('Signup and Onboarding E2E Journey', () => {
   })
 
   test('Guest access allows exploring jobs, searching, and filtering without signup', async ({ page }) => {
+    await preRecordPrivacyChoice(page)
     await page.goto('/jobs')
     await expect(page.getByPlaceholder('Search jobs, skills or companies')).toBeVisible()
     await expect(page.getByRole('combobox', { name: 'Country' })).toBeVisible()

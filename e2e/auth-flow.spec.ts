@@ -1,9 +1,11 @@
 import { expect, test } from '@playwright/test'
+import { preRecordPrivacyChoice } from './helpers'
 
 test('new signup, session persistence, logout, and returning-user login', async ({ browser, page, request }) => {
   test.setTimeout(120000)
   const email = `auth-flow-${Date.now()}@joblite.test`
 
+  await preRecordPrivacyChoice(page)
   await page.goto('/signup?next=%2Fjobs')
   await page.getByLabel('Full name').fill('E2E Auth Candidate')
   await page.getByLabel('Email address').fill(email)
@@ -40,6 +42,7 @@ test('new signup, session persistence, logout, and returning-user login', async 
   const loginContext = await browser.newContext({
     baseURL: process.env.E2E_BASE_URL || 'http://127.0.0.1:8787',
   })
+  await preRecordPrivacyChoice(loginContext)
   try {
     const loginPage = await loginContext.newPage()
     await loginContext.addCookies([{
