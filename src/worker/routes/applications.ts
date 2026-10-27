@@ -568,6 +568,10 @@ app.post('/:id/interviews', async (c) => {
        SELECT ?, ?, ?, 'interview.scheduled', ?, ? WHERE EXISTS (SELECT 1 FROM interviews WHERE id = ?)`
     ).bind(nanoid(), access.application.candidate_id, `interview-scheduled:${id}`, JSON.stringify({ application_id: appId, interview_id: id }), now, id),
     c.env.DB.prepare(
+      `INSERT INTO outbox (id, event_id, event_type, payload_json, state, created_at)
+       SELECT ?, ?, 'interview.scheduled', ?, 'pending', ? WHERE EXISTS (SELECT 1 FROM interviews WHERE id = ?)`
+    ).bind(nanoid(), eventId, JSON.stringify({ application_id: appId, interview_id: id }), now, id),
+    c.env.DB.prepare(
       `INSERT INTO audit_events (id, actor_id, organization_id, action, target_type, target_id, metadata_json, created_at)
        SELECT ?, ?, ?, 'interview.scheduled', 'interview', ?, ?, ? WHERE EXISTS (SELECT 1 FROM interviews WHERE id = ?)`
     ).bind(nanoid(), user.id, access.application.organization_id, id, JSON.stringify({ application_id: appId, scheduled_at: scheduledAt, timezone }), now, id),

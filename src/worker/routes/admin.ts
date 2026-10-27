@@ -114,7 +114,7 @@ app.get('/outbox', async (c) => {
   }
 
   const now = Math.floor(Date.now() / 1000)
-  const [counts, backlog, deliveries] = await Promise.all([
+  const [counts, backlog, deliveries, failures] = await Promise.all([
     c.env.DB.prepare('SELECT state, COUNT(*) AS count FROM outbox GROUP BY state').all(),
     c.env.DB.prepare(
       `SELECT id, event_id, event_type, state, attempts, next_attempt_at, created_at, claimed_at, processed_at, last_error
@@ -122,12 +122,20 @@ app.get('/outbox', async (c) => {
        ORDER BY created_at ASC LIMIT 50`
     ).all(),
     c.env.DB.prepare('SELECT outcome, COUNT(*) AS count FROM outbox_deliveries GROUP BY outcome').all(),
+    c.env.DB.prepare(
+      `SELECT event_id, event_type, outcome, attempts, last_error, claimed_at,
+              datetime(processed_at, 'unixepoch') AS processed_utc
+       FROM outbox_deliveries WHERE outcome IN ('retrying', 'failed')
+       ORDER BY processed_at DESC LIMIT 50`
+    ).all(),
   ])
 
   return c.json({
     data: {
       counts: counts.results,
       deliveries: deliveries.results,
+      // Delivery attempts that are still retrying or have been parked as failed.
+      delivery_failures: failures.results,
       backlog: (backlog.results as Array<Record<string, any>>).map((row) => ({
         ...row,
         lease_expired: row.state === 'dispatching' && (row.claimed_at === null || row.claimed_at <= now - OUTBOX_LEASE_SECONDS),

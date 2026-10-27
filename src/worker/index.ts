@@ -4,7 +4,14 @@ import { secureHeaders } from 'hono/secure-headers'
 import type { AppContext, Env } from './types'
 import { sameOriginMutations } from './middleware/security'
 import { flagStaleSources, runSourceIngestion } from './lib/ingestion'
-import { OUTBOX_BATCH_LIMIT, OUTBOX_LEASE_SECONDS, OUTBOX_MAX_ATTEMPTS } from './lib/outbox'
+import {
+  OUTBOX_BATCH_LIMIT,
+  OUTBOX_DELIVERY_LEASE_SECONDS,
+  OUTBOX_DELIVERY_MAX_ATTEMPTS,
+  OUTBOX_LEASE_SECONDS,
+  OUTBOX_MAX_ATTEMPTS,
+} from './lib/outbox'
+import { OUTBOX_HANDLERS, type OutboxMessage } from './lib/outbox-handlers'
 import auth from './routes/auth'
 import admin from './routes/admin'
 import me from './routes/me'
@@ -189,8 +196,16 @@ async function serveAppShell(c: any) {
 app.get('*', serveAppShell)
 app.on(['POST', 'PUT', 'PATCH', 'DELETE'], '*', serveAppShell)
 
-/** Stores only a short failure label; never the payload, recipient, or provider body. */
+/**
+ * Stores only a short failure label; never the payload, recipient, or provider
+ * body. An error may declare its own `failureLabel` for a more useful, still
+ * redacted, value than its class name.
+ */
 function failureLabel(error: unknown): string {
+  if (error && typeof error === 'object' && 'failureLabel' in error) {
+    const label = (error as { failureLabel?: unknown }).failureLabel
+    if (typeof label === 'string' && label) return label
+  }
   return error instanceof Error && error.name ? error.name : 'unknown_error'
 }
 
@@ -243,23 +258,76 @@ async function dispatchOutbox(env: Env): Promise<void> {
   }
 }
 
-type OutboxBody = { type?: unknown; event_id?: unknown; source_id?: unknown; payload?: unknown }
-type OutboxHandler = (env: Env, body: OutboxBody) => Promise<void>
+type DeliveryClaim = 'claimed' | 'in_flight' | 'done'
 
 /**
- * Delivery channels are registered here as they are built (email, push, webhooks).
- * Until a channel exists an event is recorded as `no_handler` and logged, so a
- * missing channel stays observable instead of looking like a successful delivery.
+ * Reserves an event before its side effect runs. A repeat delivery finds the row
+ * already `handled`/`no_handler`/`failed` (nothing to do), a fresh `sending` claim
+ * (another consumer is mid-send), or a `retrying`/stale claim (safe to re-claim).
  */
-const OUTBOX_HANDLERS: Partial<Record<string, OutboxHandler>> = {}
+async function claimOutboxDelivery(env: Env, eventId: string, type: string): Promise<DeliveryClaim> {
+  const now = Math.floor(Date.now() / 1000)
+  const inserted = await env.DB.prepare(
+    `INSERT OR IGNORE INTO outbox_deliveries (event_id, event_type, outcome, attempts, claimed_at, processed_at)
+     VALUES (?, ?, 'sending', 1, ?, ?)`
+  )
+    .bind(eventId, type || 'unknown', now, now)
+    .run()
+  if ((inserted.meta?.changes ?? 0) === 1) return 'claimed'
+
+  const existing = await env.DB.prepare('SELECT outcome, claimed_at FROM outbox_deliveries WHERE event_id = ?')
+    .bind(eventId)
+    .first<{ outcome: string; claimed_at: number | null }>()
+  if (!existing) return 'claimed'
+  if (['handled', 'no_handler', 'failed'].includes(existing.outcome)) return 'done'
+  if (existing.outcome === 'sending' && existing.claimed_at !== null && existing.claimed_at > now - OUTBOX_DELIVERY_LEASE_SECONDS) {
+    return 'in_flight'
+  }
+
+  const reclaimed = await env.DB.prepare(
+    `UPDATE outbox_deliveries SET outcome = 'sending', attempts = attempts + 1, claimed_at = ?, processed_at = ?
+      WHERE event_id = ? AND outcome IN ('sending', 'retrying')
+        AND NOT (outcome = 'sending' AND claimed_at > ?)`
+  )
+    .bind(now, now, eventId, now - OUTBOX_DELIVERY_LEASE_SECONDS)
+    .run()
+  return (reclaimed.meta?.changes ?? 0) === 1 ? 'claimed' : 'in_flight'
+}
+
+async function settleOutboxDelivery(env: Env, eventId: string, outcome: 'handled' | 'no_handler'): Promise<void> {
+  await env.DB.prepare(
+    "UPDATE outbox_deliveries SET outcome = ?, last_error = NULL, processed_at = ? WHERE event_id = ?"
+  )
+    .bind(outcome, Math.floor(Date.now() / 1000), eventId)
+    .run()
+}
+
+/**
+ * Records a failed attempt. Returns the attempt count so the caller can stop
+ * retrying (parking the event as `failed`) once the budget is exhausted.
+ */
+async function failOutboxDelivery(env: Env, eventId: string, label: string): Promise<number> {
+  const now = Math.floor(Date.now() / 1000)
+  const row = await env.DB.prepare('SELECT attempts FROM outbox_deliveries WHERE event_id = ?')
+    .bind(eventId)
+    .first<{ attempts: number }>()
+  const attempts = row?.attempts ?? 1
+  const exhausted = attempts >= OUTBOX_DELIVERY_MAX_ATTEMPTS
+  await env.DB.prepare(
+    'UPDATE outbox_deliveries SET outcome = ?, last_error = ?, processed_at = ? WHERE event_id = ?'
+  )
+    .bind(exhausted ? 'failed' : 'retrying', label, now, eventId)
+    .run()
+  return attempts
+}
 
 /**
  * Consumes one queued message. Background ingestion is dispatched directly; every
- * other message is an outbox event and is processed idempotently by `event_id` so
- * a redelivery cannot repeat a side effect.
+ * other message is an outbox event delivered at most once per event id, with a
+ * claim recorded before the side effect so a redelivery cannot repeat it.
  */
 async function consumeQueueMessage(env: Env, rawBody: unknown): Promise<void> {
-  const body = (rawBody && typeof rawBody === 'object' ? rawBody : {}) as OutboxBody
+  const body = (rawBody && typeof rawBody === 'object' ? rawBody : {}) as OutboxMessage
   const type = typeof body.type === 'string' ? body.type : ''
   if (type === 'source.refresh' && typeof body.source_id === 'string') {
     await runSourceIngestion(env, body.source_id)
@@ -272,22 +340,29 @@ async function consumeQueueMessage(env: Env, rawBody: unknown): Promise<void> {
     return
   }
 
-  const already = await env.DB.prepare('SELECT event_id FROM outbox_deliveries WHERE event_id = ?')
-    .bind(eventId)
-    .first()
-  if (already) return
+  if (await claimOutboxDelivery(env, eventId, type) !== 'claimed') return
 
   const handler = OUTBOX_HANDLERS[type]
-  if (handler) {
-    await handler(env, body)
-  } else {
+  if (!handler) {
+    await settleOutboxDelivery(env, eventId, 'no_handler')
     console.warn(JSON.stringify({ event: 'outbox_event_without_handler', event_type: type || 'unknown', event_id: eventId }))
+    return
   }
-  await env.DB.prepare(
-    'INSERT OR IGNORE INTO outbox_deliveries (event_id, event_type, outcome, attempts, processed_at) VALUES (?,?,?,1,?)'
-  )
-    .bind(eventId, type || 'unknown', handler ? 'handled' : 'no_handler', Math.floor(Date.now() / 1000))
-    .run()
+
+  try {
+    await handler(env, body)
+    await settleOutboxDelivery(env, eventId, 'handled')
+    console.info(JSON.stringify({ event: 'outbox_delivery_handled', event_type: type, event_id: eventId }))
+  } catch (error) {
+    const label = failureLabel(error)
+    const attempts = await failOutboxDelivery(env, eventId, label)
+    if (attempts >= OUTBOX_DELIVERY_MAX_ATTEMPTS) {
+      console.error(JSON.stringify({ event: 'outbox_delivery_abandoned', event_type: type, event_id: eventId, attempts, failure: label }))
+      return
+    }
+    console.warn(JSON.stringify({ event: 'outbox_delivery_retrying', event_type: type, event_id: eventId, attempts, failure: label }))
+    throw error
+  }
 }
 
 async function enqueueSourceRefreshes(env: Env): Promise<void> {
@@ -316,7 +391,7 @@ export default {
       } catch (error) {
         console.error(JSON.stringify({
           event: 'queue_message_failed',
-          message_type: typeof (message.body as OutboxBody)?.type === 'string' ? (message.body as OutboxBody).type : 'unknown',
+          message_type: typeof (message.body as OutboxMessage)?.type === 'string' ? (message.body as OutboxMessage).type : 'unknown',
           failure: failureLabel(error),
         }))
         message.retry()
