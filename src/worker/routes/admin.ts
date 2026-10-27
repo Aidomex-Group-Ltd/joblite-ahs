@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { AppContext } from '../types'
 import { readSessionUser } from '../middleware/auth'
 import { getSyncStatus, runIngestion } from '../lib/ingestion'
+import { OUTBOX_LEASE_SECONDS } from '../lib/outbox'
 import { clampInt } from '../lib/validate'
 
 const app = new Hono<AppContext>()
@@ -99,6 +100,42 @@ app.post('/sync', async (c) => {
 
   const summary = await runIngestion(c.env, { limit, sourceIds, ignoreInterval })
   return c.json({ data: summary })
+})
+
+/**
+ * Read-only outbox inspection: state counts, recorded delivery outcomes, and the
+ * current backlog (pending, in-flight, and parked rows) including whether an
+ * in-flight row's lease has expired. No mutation and no payload/recipient data.
+ */
+app.get('/outbox', async (c) => {
+  const access = await authorized(c)
+  if (!access.ok) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Administrative authorization is required' } }, 401)
+  }
+
+  const now = Math.floor(Date.now() / 1000)
+  const [counts, backlog, deliveries] = await Promise.all([
+    c.env.DB.prepare('SELECT state, COUNT(*) AS count FROM outbox GROUP BY state').all(),
+    c.env.DB.prepare(
+      `SELECT id, event_id, event_type, state, attempts, next_attempt_at, created_at, claimed_at, processed_at, last_error
+       FROM outbox WHERE state IN ('pending', 'dispatching', 'failed')
+       ORDER BY created_at ASC LIMIT 50`
+    ).all(),
+    c.env.DB.prepare('SELECT outcome, COUNT(*) AS count FROM outbox_deliveries GROUP BY outcome').all(),
+  ])
+
+  return c.json({
+    data: {
+      counts: counts.results,
+      deliveries: deliveries.results,
+      backlog: (backlog.results as Array<Record<string, any>>).map((row) => ({
+        ...row,
+        lease_expired: row.state === 'dispatching' && (row.claimed_at === null || row.claimed_at <= now - OUTBOX_LEASE_SECONDS),
+      })),
+      lease_seconds: OUTBOX_LEASE_SECONDS,
+      checked_at: now,
+    },
+  })
 })
 
 export default app
