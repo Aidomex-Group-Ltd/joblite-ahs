@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { apiDelete, apiGet, apiPost, errorMessage } from '../lib/api'
-import { formatRelativeTime, publicPostUrl } from '../lib/format'
+import { formatRelativeTime, publicPostUrl, videoThumbnailSrc } from '../lib/format'
 import { signInPath, useSession } from '../lib/session'
 import { EmptyState, Loading } from '../components/Common'
 import { applyPageMetadata, DEFAULT_METADATA, SITE_ORIGIN } from '../../shared/page-metadata'
@@ -177,7 +177,7 @@ export default function PostDetail() {
                 {media.kind === 'image' ? (
                   <img className="jl-post-media" src={media.url} alt={media.alt || 'Post attachment'} />
                 ) : (
-                  <video className="jl-post-media" src={media.url} muted playsInline preload="metadata" aria-hidden="true" tabIndex={-1} />
+                  <video className="jl-post-media" src={videoThumbnailSrc(media.url)} muted playsInline preload="metadata" aria-hidden="true" tabIndex={-1} />
                 )}
               </button>
             ))}

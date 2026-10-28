@@ -196,6 +196,42 @@ describe('chunked post-video uploads', () => {
     expect(r2.uploads.size).toBe(0)
   })
 
+  it('answers mobile byte-range probes, suffix ranges and unsatisfiable ranges exactly', async () => {
+    await env.DB.prepare(
+      `INSERT INTO media (id, owner_id, object_key, purpose, type, size, state, mime_type, created_at, updated_at)
+       VALUES ('range-video', 'uploader', 'uploads/range.mp4', 'post_video', 'video', 1000, 'ready', 'video/mp4', ?, ?)`
+    ).bind(now, now).run()
+    const reads: Array<{ offset: number; length: number } | undefined> = []
+    ;(env as any).MEDIA = {
+      head: async () => ({ size: 1000 }),
+      get: async (_key: string, options?: { range?: { offset: number; length: number } }) => {
+        reads.push(options?.range)
+        return { body: new Uint8Array(options?.range?.length ?? 1000), size: 1000, httpEtag: '"etag"' }
+      },
+    }
+    const fetchRange = (range: string) => request('/api/v1/media/range-video/content', 'uploader', { headers: { Range: range } })
+
+    const probe = await fetchRange('bytes=0-1')
+    expect(probe.status).toBe(206)
+    expect(probe.headers.get('Content-Range')).toBe('bytes 0-1/1000')
+    expect(probe.headers.get('Content-Length')).toBe('2')
+    expect(probe.headers.get('Content-Type')).toBe('video/mp4')
+
+    const suffix = await fetchRange('bytes=-100')
+    expect(suffix.headers.get('Content-Range')).toBe('bytes 900-999/1000')
+    expect(reads.at(-1)).toEqual({ offset: 900, length: 100 })
+
+    const open = await fetchRange('bytes=500-')
+    expect(open.headers.get('Content-Range')).toBe('bytes 500-999/1000')
+
+    const clamped = await fetchRange('bytes=990-5000')
+    expect(clamped.headers.get('Content-Range')).toBe('bytes 990-999/1000')
+
+    const beyond = await fetchRange('bytes=1000-')
+    expect(beyond.status).toBe(416)
+    expect(beyond.headers.get('Content-Range')).toBe('bytes */1000')
+  })
+
   it('only allows raw octet-stream bodies on the video part route', async () => {
     const response = await request('/api/v1/posts', 'uploader', {
       method: 'POST',

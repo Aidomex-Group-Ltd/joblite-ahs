@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { videoThumbnailSrc } from '../lib/format'
 import './JobliteHome.css'
 import './FeedReadability.css'
 
@@ -715,15 +716,14 @@ export default function JobliteHome(props: JobliteHomeProps) {
                                 <>
                                   <video
                                     className="jl-post-media"
+                                    src={videoThumbnailSrc(media.url)}
                                     muted
                                     playsInline
                                     preload="metadata"
                                     poster={media.poster}
                                     aria-hidden="true"
                                     tabIndex={-1}
-                                  >
-                                    <source src={media.url} />
-                                  </video>
+                                  />
                                   <span className="jl-media-play" aria-hidden="true">
                                     <Icon name="play" filled />
                                   </span>

@@ -39,6 +39,29 @@ async function loadOwnMultipart(env: Env, mediaId: string, ownerId: string): Pro
   ).bind(mediaId, ownerId).first<MultipartMediaRow>()
 }
 
+type ByteRange = { start: number | null; end: number | null }
+
+/** Parses a single `bytes=` range. Multi-range requests are answered with the full body. */
+export function parseByteRange(header: string): ByteRange | null {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim())
+  if (!match || (!match[1] && !match[2])) return null
+  return {
+    start: match[1] ? Number.parseInt(match[1], 10) : null,
+    end: match[2] ? Number.parseInt(match[2], 10) : null,
+  }
+}
+
+export function resolveByteRange(range: ByteRange, size: number): { start: number; end: number } | null {
+  if (size <= 0) return null
+  if (range.start === null) {
+    const suffix = Math.min(range.end ?? 0, size)
+    return suffix > 0 ? { start: size - suffix, end: size - 1 } : null
+  }
+  if (range.start >= size) return null
+  const end = range.end === null ? size - 1 : Math.min(range.end, size - 1)
+  return end >= range.start ? { start: range.start, end } : null
+}
+
 function extensionFor(mime: string): string {
   const map: Record<string, string> = {
     'image/jpeg': 'jpg',
@@ -358,26 +381,30 @@ app.get('/:id/content', optionalAuth, async (c) => {
     headers.set('Content-Disposition', 'inline; filename="submitted-cv.pdf"')
   }
 
-  if (rangeHeader) {
-    const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim())
-    if (match) {
-      const start = match[1] ? Number.parseInt(match[1], 10) : 0
-      const requestedEnd = match[2] ? Number.parseInt(match[2], 10) : undefined
-      if (Number.isFinite(start) && start >= 0) {
-        const object = await c.env.MEDIA.get(media.object_key, {
-          range: { offset: start, length: requestedEnd !== undefined ? Math.max(requestedEnd - start + 1, 1) : undefined },
-        })
-        if (!object) return c.json({ error: { code: 'NOT_FOUND', message: 'Media object missing' } }, 404)
-        const end = requestedEnd !== undefined ? Math.min(requestedEnd, object.size - 1) : object.size - 1
-        headers.set('Content-Range', `bytes ${start}-${end}/${object.size}`)
-        headers.set('Content-Length', String(end - start + 1))
-        return new Response(object.body, { status: 206, headers })
-      }
+  // Mobile Safari will not play video unless byte ranges (including `bytes=0-1`
+  // probes and suffix ranges) are answered with exact 206 responses.
+  const range = rangeHeader ? parseByteRange(rangeHeader) : null
+  if (range) {
+    const head = await c.env.MEDIA.head(media.object_key)
+    if (!head) return c.json({ error: { code: 'NOT_FOUND', message: 'Media object missing' } }, 404)
+    const bounds = resolveByteRange(range, head.size)
+    if (!bounds) {
+      headers.set('Content-Range', `bytes */${head.size}`)
+      return new Response(null, { status: 416, headers })
     }
+    const object = await c.env.MEDIA.get(media.object_key, {
+      range: { offset: bounds.start, length: bounds.end - bounds.start + 1 },
+    })
+    if (!object) return c.json({ error: { code: 'NOT_FOUND', message: 'Media object missing' } }, 404)
+    if (object.httpEtag) headers.set('ETag', object.httpEtag)
+    headers.set('Content-Range', `bytes ${bounds.start}-${bounds.end}/${head.size}`)
+    headers.set('Content-Length', String(bounds.end - bounds.start + 1))
+    return new Response(object.body, { status: 206, headers })
   }
 
   const object = await c.env.MEDIA.get(media.object_key)
   if (!object) return c.json({ error: { code: 'NOT_FOUND', message: 'Media object missing' } }, 404)
+  if (object.httpEtag) headers.set('ETag', object.httpEtag)
   headers.set('Content-Length', String(object.size))
   return new Response(object.body, { headers })
 })

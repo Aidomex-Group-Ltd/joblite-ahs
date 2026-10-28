@@ -139,6 +139,8 @@ export default function MediaViewer(props: Props) {
   const [duration, setDuration] = useState(0)
   const [videoLoading, setVideoLoading] = useState(false)
   const [videoError, setVideoError] = useState('')
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const autoplayTried = useRef(false)
 
   const closeRef = useRef<HTMLButtonElement | null>(null)
   const replyRef = useRef<HTMLTextAreaElement | null>(null)
@@ -195,6 +197,7 @@ export default function MediaViewer(props: Props) {
     setVideoError('')
     setVideoLoading(false)
     setZoom(1)
+    autoplayTried.current = false
     const video = videoRef.current
     if (video) {
       video.pause()
@@ -334,7 +337,8 @@ export default function MediaViewer(props: Props) {
       props.onRequireAuth('comment')
       return
     }
-    replyRef.current?.focus()
+    setDetailsOpen(true)
+    window.setTimeout(() => replyRef.current?.focus(), 0)
   }, [props])
 
   const togglePlay = useCallback(async () => {
@@ -348,9 +352,18 @@ export default function MediaViewer(props: Props) {
         video.pause()
         setPlaying(false)
       }
-    } catch {
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === 'AbortError') return
       setVideoError('This video could not start. Press play again or open it in a new tab.')
     }
+  }, [])
+
+  // Browsers may refuse unmuted autoplay; the big play button stays as the fallback.
+  const tryAutoplay = useCallback(() => {
+    const video = videoRef.current
+    if (!video || autoplayTried.current) return
+    autoplayTried.current = true
+    void video.play().catch(() => setPlaying(false))
   }, [])
 
   const toggleMute = useCallback(() => {
@@ -372,7 +385,13 @@ export default function MediaViewer(props: Props) {
     if (!target) return
     try {
       if (document.fullscreenElement) await document.exitFullscreen()
-      else await target.requestFullscreen()
+      else if (typeof target.requestFullscreen === 'function') await target.requestFullscreen()
+      else {
+        // iPhone Safari only supports native fullscreen on the video element itself.
+        const iosVideo = videoRef.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null
+        if (!iosVideo?.webkitEnterFullscreen) throw new Error('Fullscreen unavailable')
+        iosVideo.webkitEnterFullscreen()
+      }
     } catch {
       setNotice('Full screen is not available in this browser.')
     }
@@ -478,14 +497,25 @@ export default function MediaViewer(props: Props) {
                   src={current.url}
                   poster={current.poster}
                   playsInline
-                  preload="metadata"
-                  onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
+                  preload="auto"
+                  onClick={() => void togglePlay()}
+                  onLoadStart={() => setVideoLoading(true)}
+                  onLoadedMetadata={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+                  onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
                   onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
                   onPlay={() => setPlaying(true)}
                   onPause={() => setPlaying(false)}
+                  onEnded={() => setPlaying(false)}
                   onWaiting={() => setVideoLoading(true)}
-                  onPlaying={() => setVideoLoading(false)}
-                  onCanPlay={() => setVideoLoading(false)}
+                  onPlaying={() => {
+                    setVideoLoading(false)
+                    setVideoError('')
+                  }}
+                  onLoadedData={() => setVideoLoading(false)}
+                  onCanPlay={() => {
+                    setVideoLoading(false)
+                    tryAutoplay()
+                  }}
                   onError={() => {
                     setVideoLoading(false)
                     setVideoError('This video could not be played. The format may be unsupported or the file may be unavailable.')
@@ -611,7 +641,7 @@ export default function MediaViewer(props: Props) {
           ) : null}
         </div>
 
-        <aside className="mv-panel">
+        <aside className={`mv-panel ${detailsOpen ? 'expanded' : 'collapsed'}`}>
           <div className="mv-post">
             <div className="mv-author">
               <span className="mv-avatar" aria-hidden="true">{authorInitial}</span>
@@ -654,7 +684,17 @@ export default function MediaViewer(props: Props) {
             </button>
           </div>
 
-          <section className="mv-comments" aria-label="Replies">
+          <button
+            type="button"
+            className="mv-panel-toggle"
+            aria-expanded={detailsOpen}
+            aria-controls="mv-replies"
+            onClick={() => setDetailsOpen((open) => !open)}
+          >
+            {detailsOpen ? 'Hide replies' : `Show replies (${post?.comment_count || 0})`}
+          </button>
+
+          <section id="mv-replies" className="mv-comments" aria-label="Replies">
             <h2>Replies</h2>
             {commentsLoading ? <p className="mv-muted" role="status">Loading replies…</p> : null}
             {commentsError ? (

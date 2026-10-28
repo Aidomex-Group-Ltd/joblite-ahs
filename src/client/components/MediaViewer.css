@@ -421,6 +421,18 @@ body.jl-viewer-open {
   gap: 14px;
 }
 
+.mv-panel-toggle {
+  display: none;
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--mv-line);
+  border-radius: 8px;
+  background: transparent;
+  color: #d9e4f6;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .mv-author {
   display: flex;
   gap: 11px;

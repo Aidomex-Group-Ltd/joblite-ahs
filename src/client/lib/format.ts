@@ -151,3 +151,8 @@ export function stageLabel(stage: string): string {
   }
   return labels[stage] || stage.replace(/_/g, ' ')
 }
+
+/** Without a media fragment, iOS Safari leaves a `preload="metadata"` video blank instead of showing its first frame. */
+export function videoThumbnailSrc(url: string): string {
+  return url.includes('#') ? url : `${url}#t=0.1`
+}
