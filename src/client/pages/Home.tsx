@@ -19,6 +19,7 @@ import {
   VIDEO_TYPES,
 } from '../../shared/media-limits'
 import LargeVideoDialog from '../components/LargeVideoDialog'
+import MediaLightbox from '../components/MediaLightbox'
 import {
   formatLocation,
   formatRelativeTime,
@@ -173,6 +174,8 @@ export default function Home() {
   const viewerOpen = useRef(false)
   const viewerScroll = useRef(0)
   const viewerTrigger = useRef<HTMLElement | null>(null)
+  const [lightbox, setLightbox] = useState<{ post: PostItem; index: number; thumbnail: HTMLElement } | null>(null)
+  const lightboxOpen = useRef(false)
 
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const uploading = attachments.some((attachment) => attachment.status === 'uploading')
@@ -416,7 +419,7 @@ export default function Home() {
     }
   }, [restoreFeedPosition])
 
-  const openMedia = useCallback((post: PostItem, index: number) => {
+  const openViewer = useCallback((post: PostItem, index: number, replaceHistory = false) => {
     viewerTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     viewerScroll.current = window.scrollY
     document.querySelectorAll('video').forEach((video) => video.pause())
@@ -424,13 +427,44 @@ export default function Home() {
     setViewer({ post, index })
     document.body.classList.add('jl-viewer-open')
     const url = `/posts/${encodeURIComponent(post.id)}/media/${index}`
-    if (window.location.pathname !== url) {
-      window.history.pushState({ jobliteViewer: true }, '', url)
-    }
+    if (replaceHistory) window.history.replaceState({ jobliteViewer: true }, '', url)
+    else if (window.location.pathname !== url) window.history.pushState({ jobliteViewer: true }, '', url)
   }, [])
+
+  const openMedia = useCallback((post: PostItem, index: number, thumbnail: HTMLElement) => {
+    document.querySelectorAll('video').forEach((video) => video.pause())
+    lightboxOpen.current = true
+    setLightbox({ post, index, thumbnail })
+    document.body.classList.add('jl-viewer-open')
+    // A history entry lets the phone's back gesture collapse the media instead of leaving the feed.
+    window.history.pushState({ jobliteLightbox: true }, '', window.location.href)
+  }, [])
+
+  const finishLightbox = useCallback(() => {
+    if (!lightboxOpen.current) return
+    lightboxOpen.current = false
+    setLightbox(null)
+    document.body.classList.remove('jl-viewer-open')
+    if (window.history.state && (window.history.state as Record<string, unknown>).jobliteLightbox) window.history.back()
+  }, [])
+
+  const lightboxToViewer = useCallback(
+    (post: PostItem, index: number) => {
+      lightboxOpen.current = false
+      setLightbox(null)
+      openViewer(post, index, true)
+    },
+    [openViewer]
+  )
 
   useEffect(() => {
     const onPopState = () => {
+      if (lightboxOpen.current) {
+        lightboxOpen.current = false
+        setLightbox(null)
+        document.body.classList.remove('jl-viewer-open')
+        return
+      }
       if (!viewerOpen.current) return
       viewerOpen.current = false
       setViewer(null)
@@ -752,6 +786,19 @@ export default function Home() {
         <div className="jl-toast jl-toast-error" role="alert">
           Job board directory could not be refreshed: {boardsError}
         </div>
+      ) : null}
+
+      {lightbox ? (
+        <MediaLightbox
+          media={(lightbox.post.media || []).map((media) => ({ kind: media.kind, url: media.url, alt: media.alt, poster: media.poster }))}
+          initialIndex={lightbox.index}
+          getThumbnail={(index) => {
+            const sibling = lightbox.thumbnail.parentElement?.children[index]
+            return sibling instanceof HTMLElement ? sibling : lightbox.thumbnail
+          }}
+          onCollapsed={finishLightbox}
+          onOpenDetails={(index) => lightboxToViewer(lightbox.post, index)}
+        />
       ) : null}
 
       {viewer ? (

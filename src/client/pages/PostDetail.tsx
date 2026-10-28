@@ -4,6 +4,7 @@ import { apiDelete, apiGet, apiPost, errorMessage } from '../lib/api'
 import { formatRelativeTime, publicPostUrl, videoThumbnailSrc } from '../lib/format'
 import { signInPath, useSession } from '../lib/session'
 import { EmptyState, Loading } from '../components/Common'
+import MediaLightbox from '../components/MediaLightbox'
 import { applyPageMetadata, DEFAULT_METADATA, SITE_ORIGIN } from '../../shared/page-metadata'
 
 type Post = {
@@ -39,6 +40,13 @@ export default function PostDetail() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<{ index: number; thumbnail: HTMLElement } | null>(null)
+
+  useEffect(() => {
+    if (!expanded) return
+    document.body.classList.add('jl-viewer-open')
+    return () => document.body.classList.remove('jl-viewer-open')
+  }, [expanded])
 
   const load = useCallback(async () => {
     if (!id) return
@@ -171,8 +179,11 @@ export default function PostDetail() {
                 key={media.id}
                 type="button"
                 className="jl-media-button"
-                aria-label={`Open ${media.kind} ${index + 1} in full-screen viewer`}
-                onClick={() => navigate(`/posts/${encodeURIComponent(post.id)}/media/${index}`)}
+                aria-label={`Expand ${media.kind} ${index + 1} to full screen`}
+                onClick={(event) => {
+                  document.querySelectorAll('video').forEach((video) => video.pause())
+                  setExpanded({ index, thumbnail: event.currentTarget })
+                }}
               >
                 {media.kind === 'image' ? (
                   <img className="jl-post-media" src={media.url} alt={media.alt || 'Post attachment'} />
@@ -182,6 +193,17 @@ export default function PostDetail() {
               </button>
             ))}
           </div>
+        ) : null}
+        {expanded ? (
+          <MediaLightbox
+            media={post.media.map((media) => ({ kind: media.kind, url: media.url, alt: media.alt }))}
+            initialIndex={expanded.index}
+            getThumbnail={(index) => {
+              const sibling = expanded.thumbnail.parentElement?.children[index]
+              return sibling instanceof HTMLElement ? sibling : expanded.thumbnail
+            }}
+            onCollapsed={() => setExpanded(null)}
+          />
         ) : null}
         <div className="button-row" style={{ marginTop: 12 }}>
           <button type="button" className={`btn btn-secondary ${post.liked ? 'is-saved' : ''}`} aria-pressed={post.liked} disabled={busy !== null} onClick={() => void toggleLike()}>

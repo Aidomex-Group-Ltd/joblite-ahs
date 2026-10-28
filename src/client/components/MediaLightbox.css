@@ -1,0 +1,212 @@
+.ml-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  background: rgb(0 0 0 / 0%);
+  transition: background-color 280ms ease;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  color: #fff;
+  font: 14px/1.4 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  cursor: zoom-out;
+}
+
+.ml-backdrop.ml-expanded {
+  background: rgb(0 0 0 / 100%);
+}
+
+.ml-frame {
+  position: fixed;
+  overflow: hidden;
+  background: #000;
+  transition-property: top, left, width, height, border-radius;
+  transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: top, left, width, height;
+}
+
+.ml-media {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.ml-collapsed .ml-media,
+.ml-collapsing .ml-media {
+  object-fit: cover;
+}
+
+.ml-chrome {
+  position: fixed;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  opacity: 0;
+  transition: opacity 200ms ease;
+  pointer-events: none;
+  cursor: default;
+}
+
+.ml-expanded .ml-chrome {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ml-top {
+  top: 0;
+  justify-content: space-between;
+  padding-top: calc(10px + env(safe-area-inset-top));
+  background: linear-gradient(180deg, rgb(0 0 0 / 55%), transparent);
+}
+
+.ml-bottom {
+  bottom: 0;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  background: linear-gradient(0deg, rgb(0 0 0 / 70%), transparent);
+}
+
+.ml-button {
+  width: 42px;
+  height: 42px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 14%);
+  color: #fff;
+  padding: 10px;
+  cursor: pointer;
+}
+
+.ml-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.ml-button svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ml-button:focus-visible,
+.ml-details:focus-visible,
+.ml-unmute:focus-visible {
+  outline: 3px solid #79baff;
+  outline-offset: 2px;
+}
+
+.ml-nav {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+
+.ml-expanded .ml-nav {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ml-prev {
+  left: 10px;
+}
+
+.ml-next {
+  right: 10px;
+}
+
+.ml-counter {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  background: rgb(0 0 0 / 45%);
+  border-radius: 20px;
+  padding: 4px 10px;
+}
+
+.ml-time {
+  font-size: 11px;
+  min-width: 32px;
+  font-variant-numeric: tabular-nums;
+  color: #e3eaf6;
+}
+
+.ml-seek {
+  flex: 1;
+  min-width: 40px;
+  accent-color: #2f8cff;
+}
+
+.ml-hint {
+  flex: 1;
+  font-size: 12px;
+  color: #c9d4e6;
+}
+
+.ml-details {
+  margin-left: auto;
+  flex: none;
+  min-height: 40px;
+  border: 1px solid rgb(255 255 255 / 35%);
+  border-radius: 999px;
+  background: rgb(0 0 0 / 35%);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.ml-unmute {
+  position: fixed;
+  top: calc(64px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  border: 0;
+  border-radius: 999px;
+  background: rgb(7 31 86 / 85%);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  padding: 9px 16px;
+  cursor: pointer;
+}
+
+.ml-error {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: calc(76px + env(safe-area-inset-bottom));
+  background: rgb(64 8 20 / 94%);
+  border: 1px solid rgb(255 143 163 / 40%);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13px;
+  cursor: default;
+}
+
+.ml-error a {
+  color: #9fcbff;
+  font-weight: 700;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ml-backdrop,
+  .ml-frame,
+  .ml-chrome,
+  .ml-nav {
+    transition: none !important;
+  }
+}

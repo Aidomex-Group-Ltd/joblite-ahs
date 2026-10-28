@@ -165,7 +165,7 @@ export interface JobliteHomeProps {
   onSignIn: (intent: string) => void
   onNavigate: (path: string) => void
   onCompose: () => void
-  onOpenMedia: (post: PostItem, index: number) => void
+  onOpenMedia: (post: PostItem, index: number, thumbnail: HTMLElement) => void
   onClearFilters: () => void
   onRetry: () => void
   onPublish: (body: string, mediaIds: string[]) => Promise<void>
@@ -697,12 +697,12 @@ export default function JobliteHome(props: JobliteHomeProps) {
                               className="jl-media-button"
                               aria-label={
                                 media.kind === 'video'
-                                  ? `Open video${media.alt ? `: ${media.alt}` : ''} in full-screen viewer`
-                                  : `Open image${media.alt ? `: ${media.alt}` : ''} in full-screen viewer`
+                                  ? `Expand video${media.alt ? `: ${media.alt}` : ''} to full screen`
+                                  : `Expand image${media.alt ? `: ${media.alt}` : ''} to full screen`
                               }
                               onClick={(event) => {
                                 event.stopPropagation()
-                                props.onOpenMedia(item, index)
+                                props.onOpenMedia(item, index, event.currentTarget)
                               }}
                             >
                               {media.kind === 'image' ? (
