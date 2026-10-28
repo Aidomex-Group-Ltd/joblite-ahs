@@ -8,14 +8,40 @@ export interface LightboxMedia {
   poster?: string
 }
 
+export interface LightboxSocial {
+  liked: boolean
+  likeCount: number
+  replyCount: number
+  shareUrl: string
+  signedIn: boolean
+  /** Toggles the like; the parent owns auth and the resulting counts. */
+  onLike: () => Promise<void> | void
+  onReply: (index: number) => void
+}
+
 export interface MediaLightboxProps {
   media: LightboxMedia[]
   initialIndex: number
   /** Returns the on-page thumbnail for an attachment so the media can grow from and shrink back onto it. */
   getThumbnail: (index: number) => HTMLElement | null
   onCollapsed: () => void
-  /** Opens the full post viewer with replies; omitted where that viewer is not available. */
-  onOpenDetails?: (index: number) => void
+  /** Floating reply / like / share actions for the post that owns this media. */
+  social?: LightboxSocial
+}
+
+const compactNumber = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
+
+function SocialIcon({ name, filled = false }: { name: 'reply' | 'like' | 'share'; filled?: boolean }): JSX.Element {
+  const paths = {
+    reply: 'M21 11.5a8.4 8.4 0 0 1-12.3 7.4L3 21l2.1-5.4A8.5 8.5 0 1 1 21 11.5Z',
+    like: 'M12 20.5 4.4 13a4.9 4.9 0 0 1 7-6.9l.6.6.6-.6a4.9 4.9 0 0 1 7 6.9Z',
+    share: 'M12 15V3m0 0L7.5 7.5M12 3l4.5 4.5M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7',
+  }
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className={filled ? 'filled' : undefined}>
+      <path d={paths[name]} />
+    </svg>
+  )
 }
 
 type Phase = 'collapsed' | 'expanded' | 'collapsing'
@@ -44,7 +70,7 @@ function formatTime(seconds: number): string {
   return `${Math.floor(whole / 60)}:${(whole % 60).toString().padStart(2, '0')}`
 }
 
-export default function MediaLightbox({ media, initialIndex, getThumbnail, onCollapsed, onOpenDetails }: MediaLightboxProps): JSX.Element | null {
+export default function MediaLightbox({ media, initialIndex, getThumbnail, onCollapsed, social }: MediaLightboxProps): JSX.Element | null {
   const [index, setIndex] = useState(() => Math.min(Math.max(initialIndex, 0), Math.max(media.length - 1, 0)))
   const animate = useRef(!prefersReducedMotion())
   const [phase, setPhase] = useState<Phase>(() => (animate.current && thumbnailBox(getThumbnail(initialIndex)) ? 'collapsed' : 'expanded'))
@@ -56,6 +82,9 @@ export default function MediaLightbox({ media, initialIndex, getThumbnail, onCol
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [videoError, setVideoError] = useState(false)
+  const [optimisticLike, setOptimisticLike] = useState<{ liked: boolean; count: number } | null>(null)
+  const [likeBurst, setLikeBurst] = useState(0)
+  const [toast, setToast] = useState('')
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const closeRef = useRef<HTMLButtonElement | null>(null)
   const finished = useRef(false)
@@ -162,9 +191,50 @@ export default function MediaLightbox({ media, initialIndex, getThumbnail, onCol
     if (!video.muted && video.paused) void video.play().catch(() => undefined)
   }, [])
 
+  useEffect(() => {
+    if (!toast) return
+    const timer = window.setTimeout(() => setToast(''), 2400)
+    return () => window.clearTimeout(timer)
+  }, [toast])
+
+  const like = useCallback(async () => {
+    if (!social || optimisticLike) return
+    if (!social.signedIn) {
+      void social.onLike()
+      return
+    }
+    const next = { liked: !social.liked, count: Math.max(social.likeCount + (social.liked ? -1 : 1), 0) }
+    setOptimisticLike(next)
+    if (next.liked) setLikeBurst((value) => value + 1)
+    try {
+      await social.onLike()
+    } catch {
+      setToast('Could not update your like. Try again.')
+    } finally {
+      setOptimisticLike(null)
+    }
+  }, [optimisticLike, social])
+
+  const share = useCallback(async () => {
+    if (!social) return
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'Joblite post', url: social.shareUrl })
+        return
+      }
+      await navigator.clipboard.writeText(social.shareUrl)
+      setToast('Link copied')
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return
+      setToast('Could not share this post.')
+    }
+  }, [social])
+
   if (!current) return null
 
   const box = phase === 'expanded' || !origin ? viewport : origin
+  const liked = optimisticLike ? optimisticLike.liked : Boolean(social?.liked)
+  const likeCount = optimisticLike ? optimisticLike.count : social?.likeCount ?? 0
   const stop = (event: React.SyntheticEvent) => event.stopPropagation()
 
   return (
@@ -301,12 +371,37 @@ export default function MediaLightbox({ media, initialIndex, getThumbnail, onCol
             </button>
           </>
         ) : <span className="ml-hint">Tap the image to collapse</span>}
-        {onOpenDetails ? (
-          <button type="button" className="ml-details" onClick={() => onOpenDetails(index)}>
-            Replies
-          </button>
-        ) : null}
       </div>
+
+      {social ? (
+        <div className="ml-social" role="group" aria-label="Post actions" onClick={stop}>
+          <button type="button" className="ml-social-action" aria-label={`Reply, ${social.replyCount} replies`} onClick={() => social.onReply(index)}>
+            <SocialIcon name="reply" />
+            <span>{social.replyCount > 0 ? compactNumber.format(social.replyCount) : ''}</span>
+          </button>
+          <button
+            type="button"
+            className={`ml-social-action ml-like ${liked ? 'liked' : ''}`}
+            aria-pressed={liked}
+            aria-label={`${liked ? 'Unlike' : 'Like'}, ${likeCount} likes`}
+            onClick={() => void like()}
+          >
+            <span key={likeBurst} className={likeBurst > 0 && liked ? 'ml-like-pop' : undefined}>
+              <SocialIcon name="like" filled={liked} />
+            </span>
+            <span>{likeCount > 0 ? compactNumber.format(likeCount) : ''}</span>
+          </button>
+          <button type="button" className="ml-social-action" aria-label="Share post" onClick={() => void share()}>
+            <SocialIcon name="share" />
+          </button>
+        </div>
+      ) : null}
+
+      {toast ? (
+        <div className="ml-toast" role="status" onClick={stop}>
+          {toast}
+        </div>
+      ) : null}
     </div>
   )
 }

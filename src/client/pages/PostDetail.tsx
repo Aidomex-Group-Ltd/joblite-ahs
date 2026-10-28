@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { apiDelete, apiGet, apiPost, errorMessage } from '../lib/api'
 import { formatRelativeTime, publicPostUrl, videoThumbnailSrc } from '../lib/format'
@@ -41,6 +41,7 @@ export default function PostDetail() {
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<{ index: number; thumbnail: HTMLElement } | null>(null)
+  const replyRef = useRef<HTMLTextAreaElement | null>(null)
 
   useEffect(() => {
     if (!expanded) return
@@ -203,6 +204,25 @@ export default function PostDetail() {
               return sibling instanceof HTMLElement ? sibling : expanded.thumbnail
             }}
             onCollapsed={() => setExpanded(null)}
+            social={{
+              liked: post.liked,
+              likeCount: post.like_count,
+              replyCount: post.comment_count,
+              shareUrl: publicPostUrl(post.id),
+              signedIn: Boolean(session.user),
+              onLike: toggleLike,
+              onReply: () => {
+                setExpanded(null)
+                if (!session.user) {
+                  requireSignIn('comment')
+                  return
+                }
+                window.setTimeout(() => {
+                  replyRef.current?.scrollIntoView({ block: 'center' })
+                  replyRef.current?.focus({ preventScroll: true })
+                }, 0)
+              },
+            }}
           />
         ) : null}
         <div className="button-row" style={{ marginTop: 12 }}>
@@ -246,6 +266,7 @@ export default function PostDetail() {
           <label>
             Reply
             <textarea
+              ref={replyRef}
               className="input"
               rows={2}
               maxLength={2000}

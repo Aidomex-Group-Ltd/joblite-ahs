@@ -448,6 +448,17 @@ export default function Home() {
     if (window.history.state && (window.history.state as Record<string, unknown>).jobliteLightbox) window.history.back()
   }, [])
 
+  // Sign-in sits below the lightbox, so collapse first and act once the lightbox history entry is gone.
+  const collapseLightboxThen = useCallback(
+    (action: () => void) => {
+      const ownsEntry = Boolean(window.history.state && (window.history.state as Record<string, unknown>).jobliteLightbox)
+      if (ownsEntry) window.addEventListener('popstate', () => action(), { once: true })
+      finishLightbox()
+      if (!ownsEntry) action()
+    },
+    [finishLightbox]
+  )
+
   const lightboxToViewer = useCallback(
     (post: PostItem, index: number) => {
       lightboxOpen.current = false
@@ -797,7 +808,24 @@ export default function Home() {
             return sibling instanceof HTMLElement ? sibling : lightbox.thumbnail
           }}
           onCollapsed={finishLightbox}
-          onOpenDetails={(index) => lightboxToViewer(lightbox.post, index)}
+          social={(() => {
+            const post = posts.find((item) => item.id === lightbox.post.id) ?? lightbox.post
+            return {
+              liked: post.liked,
+              likeCount: post.likeCount,
+              replyCount: post.commentCount,
+              shareUrl: publicPostUrl(post.id),
+              signedIn: Boolean(session.user),
+              onLike: async () => {
+                if (!session.user) {
+                  collapseLightboxThen(() => handleSignIn('like'))
+                  return
+                }
+                await handlePostAction(post, 'like')
+              },
+              onReply: (index: number) => lightboxToViewer(post, index),
+            }
+          })()}
         />
       ) : null}
 
