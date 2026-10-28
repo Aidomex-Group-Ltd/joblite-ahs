@@ -1,6 +1,7 @@
 import type { Context, Next } from 'hono'
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+const VIDEO_PART_PATH = /^\/api\/v1\/media\/multipart\/[^/]+\/parts\/\d+$/
 
 function configuredOrigin(c: Context<any>): string | null {
   const appUrl = (c.env as any)?.APP_URL
@@ -36,7 +37,8 @@ export async function sameOriginMutations(c: Context<any>, next: Next) {
   if (MUTATING.has(c.req.method) && c.req.path.startsWith('/api/')) {
     const contentType = c.req.header('Content-Type') || ''
     const hasBody = c.req.method !== 'DELETE'
-    if (hasBody && !contentType.includes('application/json') && !contentType.includes('multipart/form-data') && !contentType.includes('application/x-www-form-urlencoded')) {
+    const isVideoPart = c.req.method === 'PUT' && VIDEO_PART_PATH.test(c.req.path) && contentType.includes('application/octet-stream')
+    if (hasBody && !isVideoPart && !contentType.includes('application/json') && !contentType.includes('multipart/form-data') && !contentType.includes('application/x-www-form-urlencoded')) {
       return c.json({ error: { code: 'UNSUPPORTED_MEDIA_TYPE', message: 'Expected a JSON or form request body' } }, 415)
     }
   }

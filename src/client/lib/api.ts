@@ -136,16 +136,32 @@ export function uploadMediaWithProgress(
   onProgress: (percent: number) => void,
   signal?: AbortSignal
 ): Promise<UploadedMedia> {
-  return new Promise<UploadedMedia>((resolve, reject) => {
-    const form = new FormData()
-    form.append('file', file)
-    form.append('purpose', purpose)
-    form.append('filename', file.name)
+  const form = new FormData()
+  form.append('file', file)
+  form.append('purpose', purpose)
+  form.append('filename', file.name)
+  return sendWithProgress<UploadedMedia>('POST', '/api/v1/media/upload', form, {}, (loaded, total) => {
+    if (total > 0) onProgress(Math.min(99, Math.round((loaded / total) * 100)))
+  }, signal).then((media) => {
+    onProgress(100)
+    return media
+  })
+}
 
+function sendWithProgress<T>(
+  method: 'POST' | 'PUT',
+  url: string,
+  body: XMLHttpRequestBodyInit,
+  headers: Record<string, string>,
+  onProgress: (loaded: number, total: number) => void,
+  signal?: AbortSignal
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest()
-    xhr.open('POST', '/api/v1/media/upload')
+    xhr.open(method, url)
     xhr.withCredentials = true
     xhr.setRequestHeader('Accept', 'application/json')
+    for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value)
 
     const abort = () => xhr.abort()
     if (signal) {
@@ -157,8 +173,7 @@ export function uploadMediaWithProgress(
     }
 
     xhr.upload.onprogress = (event) => {
-      if (!event.lengthComputable || event.total === 0) return
-      onProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)))
+      if (event.lengthComputable) onProgress(event.loaded, event.total)
     }
     xhr.onload = () => {
       signal?.removeEventListener('abort', abort)
@@ -169,8 +184,7 @@ export function uploadMediaWithProgress(
         payload = null
       }
       if (xhr.status >= 200 && xhr.status < 300 && payload?.data) {
-        onProgress(100)
-        resolve(payload.data as UploadedMedia)
+        resolve(payload.data as T)
         return
       }
       const error = payload?.error
@@ -190,8 +204,106 @@ export function uploadMediaWithProgress(
       signal?.removeEventListener('abort', abort)
       reject(new DOMException('Upload cancelled', 'AbortError'))
     }
-    xhr.send(form)
+    xhr.send(body)
   })
+}
+
+type MultipartSession = { media_id: string; part_size: number; part_count: number; size: number }
+type UploadedPart = { part_number: number; etag: string }
+
+const PART_CONCURRENCY = 3
+const PART_ATTEMPTS = 3
+
+function isRetryable(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 0 || error.status === 429 || error.status >= 500)
+}
+
+/**
+ * Uploads a post video in fixed-size parts so large files never pass through a
+ * single Worker request. `acknowledgeLargeFile` must reflect an explicit user
+ * confirmation; the server rejects videos above the recommended size without it.
+ */
+export async function uploadVideoInParts(
+  file: File,
+  options: { acknowledgeLargeFile: boolean; onProgress: (percent: number) => void; signal?: AbortSignal }
+): Promise<UploadedMedia> {
+  const { acknowledgeLargeFile, onProgress, signal } = options
+  const session = (
+    await request<MultipartSession>('/media/multipart', {
+      method: 'POST',
+      body: JSON.stringify({
+        purpose: 'post_video',
+        content_type: file.type,
+        size: file.size,
+        filename: file.name,
+        acknowledge_large_file: acknowledgeLargeFile,
+      }),
+      signal,
+    })
+  ).data
+  const mediaPath = `/media/multipart/${encodeURIComponent(session.media_id)}`
+  const partsController = new AbortController()
+  const cancelParts = () => partsController.abort()
+  signal?.addEventListener('abort', cancelParts, { once: true })
+  const loadedByPart = new Map<number, number>()
+  const reportProgress = () => {
+    let loaded = 0
+    for (const value of loadedByPart.values()) loaded += value
+    onProgress(Math.min(99, Math.round((loaded / Math.max(file.size, 1)) * 100)))
+  }
+
+  const sendPart = async (partNumber: number): Promise<UploadedPart> => {
+    const start = (partNumber - 1) * session.part_size
+    const chunk = file.slice(start, Math.min(start + session.part_size, file.size))
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await sendWithProgress<UploadedPart>(
+          'PUT',
+          `/api/v1${mediaPath}/parts/${partNumber}`,
+          chunk,
+          { 'Content-Type': 'application/octet-stream' },
+          (loaded) => {
+            loadedByPart.set(partNumber, loaded)
+            reportProgress()
+          },
+          partsController.signal
+        )
+      } catch (error) {
+        loadedByPart.set(partNumber, 0)
+        if (attempt >= PART_ATTEMPTS || !isRetryable(error) || partsController.signal.aborted) throw error
+        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt))
+      }
+    }
+  }
+
+  try {
+    const parts: UploadedPart[] = []
+    let next = 1
+    const worker = async () => {
+      while (next <= session.part_count) {
+        const partNumber = next
+        next += 1
+        const part = await sendPart(partNumber)
+        loadedByPart.set(partNumber, chunkSize(partNumber, session))
+        reportProgress()
+        parts.push(part)
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(PART_CONCURRENCY, session.part_count) }, worker))
+    const media = (await request<UploadedMedia>(`${mediaPath}/complete`, { method: 'POST', body: JSON.stringify({ parts }), signal })).data
+    onProgress(100)
+    return media
+  } catch (error) {
+    partsController.abort()
+    void request(`/media/${encodeURIComponent(session.media_id)}`, { method: 'DELETE' }).catch(() => {})
+    throw error
+  } finally {
+    signal?.removeEventListener('abort', cancelParts)
+  }
+}
+
+function chunkSize(partNumber: number, session: MultipartSession): number {
+  return partNumber < session.part_count ? session.part_size : session.size - session.part_size * (session.part_count - 1)
 }
 
 export function isAbortError(error: unknown): boolean {

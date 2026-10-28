@@ -9,7 +9,16 @@ import JobliteHome, {
   PostItem,
   User as HomeUser,
 } from '../components/JobliteHome'
-import { apiDelete, apiGet, apiPost, errorMessage, isAbortError, uploadMedia } from '../lib/api'
+import { apiDelete, apiGet, apiPost, errorMessage, isAbortError, uploadMedia, uploadVideoInParts } from '../lib/api'
+import {
+  formatMegabytes,
+  IMAGE_MAX_BYTES,
+  IMAGE_TYPES,
+  VIDEO_HARD_MAX_BYTES,
+  VIDEO_RECOMMENDED_MAX_BYTES,
+  VIDEO_TYPES,
+} from '../../shared/media-limits'
+import LargeVideoDialog from '../components/LargeVideoDialog'
 import {
   formatLocation,
   formatRelativeTime,
@@ -166,12 +175,21 @@ export default function Home() {
   const viewerTrigger = useRef<HTMLElement | null>(null)
 
   const [attachments, setAttachments] = useState<Attachment[]>([])
-  const [uploading, setUploading] = useState(false)
+  const uploading = attachments.some((attachment) => attachment.status === 'uploading')
+  const [largeVideo, setLargeVideo] = useState<File | null>(null)
+  const uploadControllers = useRef<Map<string, AbortController>>(new Map())
   const [pendingDraft, setPendingDraft] = useState('')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const pendingKind = useRef<'image' | 'video'>('image')
   const requestId = useRef(0)
   const abortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    const controllers = uploadControllers.current
+    return () => {
+      for (const controller of controllers.values()) controller.abort()
+    }
+  }, [])
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(filters.query.trim()), 300)
@@ -530,17 +548,17 @@ export default function Home() {
   function handleAddMedia(kind: 'image' | 'video') {
     pendingKind.current = kind
     if (fileInputRef.current) {
-      fileInputRef.current.accept = kind === 'image' ? 'image/jpeg,image/png,image/webp,image/gif' : 'video/mp4,video/webm'
+      fileInputRef.current.accept = (kind === 'image' ? IMAGE_TYPES : VIDEO_TYPES).join(',')
       fileInputRef.current.value = ''
       fileInputRef.current.click()
     }
   }
 
-  async function handleFileSelected(file: File | null) {
+  function handleFileSelected(file: File | null) {
     if (!file) return
     const kind = pendingKind.current
-    const maxBytes = kind === 'image' ? 8 * 1024 * 1024 : 50 * 1024 * 1024
-    const allowed = kind === 'image' ? ['image/jpeg', 'image/png', 'image/webp', 'image/gif'] : ['video/mp4', 'video/webm']
+    const maxBytes = kind === 'image' ? IMAGE_MAX_BYTES : VIDEO_HARD_MAX_BYTES
+    const allowed = kind === 'image' ? IMAGE_TYPES : VIDEO_TYPES
     const localId = `local_${Date.now()}`
 
     if (!allowed.includes(file.type)) {
@@ -553,37 +571,62 @@ export default function Home() {
     if (file.size > maxBytes) {
       setAttachments((current) => [
         ...current,
-        { id: localId, name: file.name, kind, status: 'error', error: `File is larger than ${Math.round(maxBytes / (1024 * 1024))} MB.` },
+        { id: localId, name: file.name, kind, status: 'error', error: `File is larger than the ${formatMegabytes(maxBytes)} maximum.` },
       ])
       return
     }
+    if (kind === 'video' && file.size > VIDEO_RECOMMENDED_MAX_BYTES) {
+      setLargeVideo(file)
+      return
+    }
+    void startUpload(file, kind, false)
+  }
 
+  async function startUpload(file: File, kind: 'image' | 'video', acknowledgeLargeFile: boolean) {
+    const localId = `local_${Date.now()}_${Math.random().toString(36).slice(2)}`
     const previewUrl = kind === 'image' ? URL.createObjectURL(file) : undefined
-    setAttachments((current) => [...current, { id: localId, name: file.name, kind, status: 'uploading', previewUrl }])
-    setUploading(true)
+    const controller = new AbortController()
+    uploadControllers.current.set(localId, controller)
+    setAttachments((current) => [...current, { id: localId, name: file.name, kind, status: 'uploading', previewUrl, progress: 0 }])
     try {
-      const media = await uploadMedia(file, kind === 'image' ? 'post_image' : 'post_video')
+      const media = kind === 'video'
+        ? await uploadVideoInParts(file, {
+          acknowledgeLargeFile,
+          signal: controller.signal,
+          onProgress: (percent) => {
+            setAttachments((current) =>
+              current.map((attachment) => (attachment.id === localId ? { ...attachment, progress: percent } : attachment))
+            )
+          },
+        })
+        : await uploadMedia(file, 'post_image')
+      if (controller.signal.aborted) {
+        void apiDelete(`/media/${encodeURIComponent(media.id)}`).catch(() => {})
+        return
+      }
       setAttachments((current) =>
         current.map((attachment) =>
           attachment.id === localId
-            ? { ...attachment, id: media.id, status: 'ready', error: undefined }
+            ? { ...attachment, id: media.id, status: 'ready', progress: 100, error: undefined }
             : attachment
         )
       )
     } catch (error) {
+      if (isAbortError(error)) return
       setAttachments((current) =>
         current.map((attachment) =>
           attachment.id === localId ? { ...attachment, status: 'error', error: errorMessage(error) } : attachment
         )
       )
     } finally {
-      setUploading(false)
+      uploadControllers.current.delete(localId)
     }
   }
 
   function removeAttachment(id: string) {
     const target = attachments.find((attachment) => attachment.id === id)
     if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl)
+    uploadControllers.current.get(id)?.abort()
     if (target?.status === 'ready') {
       void apiDelete(`/media/${encodeURIComponent(target.id)}`).catch(() => {})
     }
@@ -621,8 +664,20 @@ export default function Home() {
         className="sr-only"
         aria-hidden="true"
         tabIndex={-1}
-        onChange={(event) => void handleFileSelected(event.target.files?.[0] || null)}
+        onChange={(event) => handleFileSelected(event.target.files?.[0] || null)}
       />
+
+      {largeVideo ? (
+        <LargeVideoDialog
+          files={[{ name: largeVideo.name, size: largeVideo.size }]}
+          onConfirm={() => {
+            const file = largeVideo
+            setLargeVideo(null)
+            void startUpload(file, 'video', true)
+          }}
+          onCancel={() => setLargeVideo(null)}
+        />
+      ) : null}
 
       <JobliteHome
         user={user}

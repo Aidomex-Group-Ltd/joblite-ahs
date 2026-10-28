@@ -1,15 +1,42 @@
 import { Hono } from 'hono'
-import type { AppContext } from '../types'
+import type { AppContext, Env } from '../types'
 import { nanoid } from 'nanoid'
 import { optionalAuth, requireAuth } from '../middleware/auth'
 import { slugify } from '../lib/validate'
+import {
+  formatMegabytes,
+  IMAGE_MAX_BYTES,
+  IMAGE_TYPES,
+  VIDEO_HARD_MAX_BYTES,
+  VIDEO_PART_BYTES,
+  VIDEO_RECOMMENDED_MAX_BYTES,
+  VIDEO_TYPES,
+  videoPartCount,
+} from '../../shared/media-limits'
 
 const app = new Hono<AppContext>()
 
+// Single-request uploads are buffered in Worker memory, so large videos must use
+// the multipart endpoints below instead of POST /upload.
 const RULES: Record<string, { kind: 'image' | 'video' | 'document'; maxBytes: number; types: string[] }> = {
-  post_image: { kind: 'image', maxBytes: 8 * 1024 * 1024, types: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'] },
-  post_video: { kind: 'video', maxBytes: 50 * 1024 * 1024, types: ['video/mp4', 'video/webm'] },
+  post_image: { kind: 'image', maxBytes: IMAGE_MAX_BYTES, types: IMAGE_TYPES },
+  post_video: { kind: 'video', maxBytes: 50 * 1024 * 1024, types: VIDEO_TYPES },
   cv: { kind: 'document', maxBytes: 10 * 1024 * 1024, types: ['application/pdf'] },
+}
+
+type MultipartMediaRow = {
+  id: string
+  object_key: string
+  provider_id: string | null
+  size: number
+  mime_type: string | null
+  state: string
+}
+
+async function loadOwnMultipart(env: Env, mediaId: string, ownerId: string): Promise<MultipartMediaRow | null> {
+  return await env.DB.prepare(
+    "SELECT id, object_key, provider_id, size, mime_type, state FROM media WHERE id = ? AND owner_id = ? AND purpose = 'post_video'"
+  ).bind(mediaId, ownerId).first<MultipartMediaRow>()
 }
 
 function extensionFor(mime: string): string {
@@ -123,6 +150,161 @@ app.post('/intents', requireAuth, async (c) => {
   )
 })
 
+/**
+ * Starts a chunked post-video upload backed by an R2 multipart upload. Videos
+ * above the recommended size need `acknowledge_large_file: true`, which the
+ * client only sends after the uploader confirms the large-file warning.
+ */
+app.post('/multipart', requireAuth, async (c) => {
+  const user = c.get('user')!
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
+  if (body.purpose !== 'post_video') {
+    return c.json({ error: { code: 'INVALID_PURPOSE', message: 'Chunked uploads are only available for post videos' } }, 400)
+  }
+  const contentType = typeof body.content_type === 'string' ? body.content_type : ''
+  if (!VIDEO_TYPES.includes(contentType)) {
+    return c.json({ error: { code: 'INVALID_TYPE', message: `Unsupported file type. Allowed: ${VIDEO_TYPES.join(', ')}` } }, 400)
+  }
+  const size = typeof body.size === 'number' && Number.isSafeInteger(body.size) ? body.size : 0
+  if (size <= 0) return c.json({ error: { code: 'INVALID_FILE', message: 'The selected file is empty' } }, 400)
+  if (size > VIDEO_HARD_MAX_BYTES) {
+    return c.json(
+      { error: { code: 'FILE_TOO_LARGE', message: `Videos can be at most ${formatMegabytes(VIDEO_HARD_MAX_BYTES)}` } },
+      413
+    )
+  }
+  if (size > VIDEO_RECOMMENDED_MAX_BYTES && body.acknowledge_large_file !== true) {
+    return c.json(
+      {
+        error: {
+          code: 'LARGE_FILE_CONFIRMATION_REQUIRED',
+          message: `This video is larger than the recommended ${formatMegabytes(VIDEO_RECOMMENDED_MAX_BYTES)}. Confirm to upload it anyway.`,
+        },
+      },
+      409
+    )
+  }
+
+  const mediaId = nanoid()
+  const rawName = typeof body.filename === 'string' ? body.filename.replace(/\.[^.]+$/, '') : ''
+  const filename = slugify(rawName || 'upload', 40) || 'upload'
+  const objectKey = `uploads/${user.id}/${mediaId}/${filename}.${extensionFor(contentType)}`
+  const upload = await c.env.MEDIA.createMultipartUpload(objectKey, {
+    httpMetadata: { contentType, cacheControl: 'public, max-age=31536000, immutable' },
+  })
+
+  const now = Math.floor(Date.now() / 1000)
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO media (id, owner_id, object_key, provider_id, purpose, type, size, state, mime_type, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+    )
+      .bind(mediaId, user.id, objectKey, upload.uploadId, 'post_video', 'video', size, 'uploading', contentType, now, now)
+      .run()
+  } catch (error) {
+    await upload.abort().catch(() => {})
+    throw error
+  }
+
+  return c.json(
+    {
+      data: {
+        media_id: mediaId,
+        state: 'uploading',
+        part_size: VIDEO_PART_BYTES,
+        part_count: videoPartCount(size),
+        size,
+      },
+    },
+    201
+  )
+})
+
+app.put('/multipart/:id/parts/:part', requireAuth, async (c) => {
+  const user = c.get('user')!
+  const media = await loadOwnMultipart(c.env, c.req.param('id') || '', user.id)
+  if (!media) return c.json({ error: { code: 'NOT_FOUND', message: 'Upload not found' } }, 404)
+  if (media.state !== 'uploading' || !media.provider_id) {
+    return c.json({ error: { code: 'UPLOAD_CLOSED', message: 'This upload is no longer accepting parts' } }, 409)
+  }
+
+  const partCount = videoPartCount(media.size)
+  const partParam = c.req.param('part') || ''
+  const partNumber = /^\d+$/.test(partParam) ? Number.parseInt(partParam, 10) : 0
+  if (partNumber < 1 || partNumber > partCount) {
+    return c.json({ error: { code: 'INVALID_PART', message: `Part number must be between 1 and ${partCount}` } }, 400)
+  }
+  const expected = partNumber < partCount ? VIDEO_PART_BYTES : media.size - VIDEO_PART_BYTES * (partCount - 1)
+  const declared = Number.parseInt(c.req.header('Content-Length') || '', 10)
+  if (Number.isFinite(declared) && declared > expected) {
+    return c.json({ error: { code: 'PART_SIZE_MISMATCH', message: `Part ${partNumber} must be exactly ${expected} bytes` } }, 413)
+  }
+
+  const data = await c.req.arrayBuffer()
+  if (data.byteLength !== expected) {
+    return c.json({ error: { code: 'PART_SIZE_MISMATCH', message: `Part ${partNumber} must be exactly ${expected} bytes` } }, 400)
+  }
+
+  const upload = c.env.MEDIA.resumeMultipartUpload(media.object_key, media.provider_id)
+  const part = await upload.uploadPart(partNumber, data)
+  return c.json({ data: { part_number: part.partNumber, etag: part.etag } })
+})
+
+app.post('/multipart/:id/complete', requireAuth, async (c) => {
+  const user = c.get('user')!
+  const media = await loadOwnMultipart(c.env, c.req.param('id') || '', user.id)
+  if (!media) return c.json({ error: { code: 'NOT_FOUND', message: 'Upload not found' } }, 404)
+  if (media.state !== 'uploading' || !media.provider_id) {
+    return c.json({ error: { code: 'UPLOAD_CLOSED', message: 'This upload has already been completed or cancelled' } }, 409)
+  }
+
+  const body = (await c.req.json().catch(() => ({}))) as { parts?: unknown }
+  const partCount = videoPartCount(media.size)
+  const parts = (Array.isArray(body.parts) ? body.parts : [])
+    .map((value: unknown) => {
+      const item = (value && typeof value === 'object' ? value : {}) as { part_number?: unknown; etag?: unknown }
+      return { partNumber: Number(item.part_number), etag: typeof item.etag === 'string' ? item.etag : '' }
+    })
+    .sort((a, b) => a.partNumber - b.partNumber)
+  const complete = parts.length === partCount && parts.every((part, index) => part.partNumber === index + 1 && part.etag)
+  if (!complete) {
+    return c.json({ error: { code: 'UPLOAD_INCOMPLETE', message: `All ${partCount} parts must be uploaded before completing` } }, 400)
+  }
+
+  const upload = c.env.MEDIA.resumeMultipartUpload(media.object_key, media.provider_id)
+  let object: R2Object
+  try {
+    object = await upload.complete(parts)
+  } catch {
+    return c.json({ error: { code: 'UPLOAD_INCOMPLETE', message: 'The uploaded parts could not be assembled. Retry the upload.' } }, 400)
+  }
+  if (object.size !== media.size) {
+    await c.env.MEDIA.delete(media.object_key).catch(() => {})
+    await c.env.DB.prepare('DELETE FROM media WHERE id = ?').bind(media.id).run()
+    return c.json({ error: { code: 'UPLOAD_INCOMPLETE', message: 'The uploaded video does not match the declared size' } }, 400)
+  }
+
+  await c.env.DB.prepare(
+    "UPDATE media SET state = 'ready', provider_id = NULL, size = ?, updated_at = ? WHERE id = ? AND state = 'uploading'"
+  )
+    .bind(object.size, Math.floor(Date.now() / 1000), media.id)
+    .run()
+
+  return c.json(
+    {
+      data: {
+        id: media.id,
+        url: `/api/v1/media/${media.id}/content`,
+        kind: 'video',
+        mime_type: media.mime_type,
+        size: object.size,
+        name: media.object_key.split('/').pop()?.replace(/\.[^.]+$/, '') || 'upload',
+      },
+    },
+    201
+  )
+})
+
 app.post('/:id/complete', requireAuth, async (c) => {
   const user = c.get('user')!
   const mediaId = c.req.param('id')
@@ -215,6 +397,9 @@ app.delete('/:id', requireAuth, async (c) => {
     return c.json({ error: { code: 'MEDIA_IN_USE', message: 'This CV is preserved as submitted application evidence' } }, 409)
   }
 
+  if (media.state === 'uploading' && media.provider_id) {
+    await c.env.MEDIA.resumeMultipartUpload(media.object_key, media.provider_id).abort().catch(() => {})
+  }
   await c.env.MEDIA.delete(media.object_key).catch(() => {})
   await c.env.DB.prepare('DELETE FROM media WHERE id = ?').bind(mediaId).run()
   return c.json({ data: { id: mediaId, deleted: true } })

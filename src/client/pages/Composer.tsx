@@ -1,16 +1,21 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiDelete, apiPost, errorMessage, uploadMediaWithProgress } from '../lib/api'
+import { apiDelete, apiPost, errorMessage, uploadMediaWithProgress, uploadVideoInParts } from '../lib/api'
 import { useSession } from '../lib/session'
 import { useAuthExperience } from '../components/AuthExperience'
+import LargeVideoDialog from '../components/LargeVideoDialog'
+import {
+  formatMegabytes,
+  IMAGE_MAX_BYTES,
+  IMAGE_TYPES,
+  VIDEO_HARD_MAX_BYTES,
+  VIDEO_RECOMMENDED_MAX_BYTES,
+  VIDEO_TYPES,
+} from '../../shared/media-limits'
 import './Composer.css'
 
 const DRAFT_KEY = 'joblite:pendingDraft'
 const MAX_ATTACHMENTS = 4
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024
-const MAX_VIDEO_BYTES = 50 * 1024 * 1024
-const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
-const VIDEO_TYPES = ['video/mp4', 'video/webm']
 
 type AttachmentKind = 'image' | 'video'
 
@@ -20,14 +25,19 @@ type Attachment = {
   kind: AttachmentKind
   status: 'uploading' | 'ready' | 'error'
   progress: number
+  acknowledgedLarge: boolean
   mediaId?: string
   serverUrl?: string
   previewUrl?: string
   error?: string
 }
 
-function attachmentLabel(kind: AttachmentKind): string {
-  return kind === 'image' ? 'JPEG, PNG, WebP or GIF up to 8 MB' : 'MP4 or WebM up to 50 MB'
+type PendingFile = { file: File; kind: AttachmentKind; large: boolean }
+
+function attachmentLabel(attachment: Attachment): string {
+  if (attachment.kind === 'image') return `JPEG, PNG, WebP or GIF up to ${formatMegabytes(IMAGE_MAX_BYTES)}`
+  if (attachment.acknowledgedLarge) return `Large video (${formatMegabytes(attachment.file.size)}) — confirmed by you`
+  return `MP4 or WebM up to ${formatMegabytes(VIDEO_RECOMMENDED_MAX_BYTES)}`
 }
 
 export default function Composer() {
@@ -37,6 +47,7 @@ export default function Composer() {
   const [draft, setDraft] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [notice, setNotice] = useState('')
+  const [pendingLarge, setPendingLarge] = useState<PendingFile[] | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [closing, setClosing] = useState(false)
   const imageInput = useRef<HTMLInputElement | null>(null)
@@ -91,12 +102,12 @@ export default function Composer() {
 
   const validateFile = useCallback((file: File, kind: AttachmentKind): string | null => {
     const allowed = kind === 'image' ? IMAGE_TYPES : VIDEO_TYPES
-    const maxBytes = kind === 'image' ? MAX_IMAGE_BYTES : MAX_VIDEO_BYTES
+    const maxBytes = kind === 'image' ? IMAGE_MAX_BYTES : VIDEO_HARD_MAX_BYTES
     if (!allowed.includes(file.type)) {
       return `Unsupported type. Use ${kind === 'image' ? 'JPEG, PNG, WebP or GIF' : 'MP4 or WebM'}.`
     }
     if (file.size === 0) return 'This file is empty.'
-    if (file.size > maxBytes) return `This file is larger than ${Math.round(maxBytes / (1024 * 1024))} MB.`
+    if (file.size > maxBytes) return `${file.name} is larger than the ${formatMegabytes(maxBytes)} maximum.`
     return null
   }, [])
 
@@ -109,17 +120,19 @@ export default function Composer() {
           item.localId === attachment.localId ? { ...item, status: 'uploading', progress: 0, error: undefined } : item
         )
       )
-      try {
-        const media = await uploadMediaWithProgress(
-          attachment.file,
-          attachment.kind === 'image' ? 'post_image' : 'post_video',
-          (percent) => {
-            setAttachments((current) =>
-              current.map((item) => (item.localId === attachment.localId ? { ...item, progress: percent } : item))
-            )
-          },
-          controller.signal
+      const onProgress = (percent: number) => {
+        setAttachments((current) =>
+          current.map((item) => (item.localId === attachment.localId ? { ...item, progress: percent } : item))
         )
+      }
+      try {
+        const media = attachment.kind === 'video'
+          ? await uploadVideoInParts(attachment.file, {
+            acknowledgeLargeFile: attachment.acknowledgedLarge,
+            onProgress,
+            signal: controller.signal,
+          })
+          : await uploadMediaWithProgress(attachment.file, 'post_image', onProgress, controller.signal)
         setAttachments((current) =>
           current.map((item) =>
             item.localId === attachment.localId
@@ -143,6 +156,26 @@ export default function Composer() {
     []
   )
 
+  const startUploads = useCallback(
+    (files: PendingFile[], acknowledgedLarge: boolean) => {
+      const room = MAX_ATTACHMENTS - attachmentsRef.current.length
+      const next: Attachment[] = files.slice(0, Math.max(room, 0)).map(({ file, kind, large }) => ({
+        localId: `local_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        file,
+        kind,
+        status: 'uploading',
+        progress: 0,
+        acknowledgedLarge: large && acknowledgedLarge,
+        previewUrl: URL.createObjectURL(file),
+      }))
+      if (next.length === 0) return
+      attachmentsRef.current = [...attachmentsRef.current, ...next]
+      setAttachments((current) => [...current, ...next])
+      for (const attachment of next) void uploadAttachment(attachment)
+    },
+    [uploadAttachment]
+  )
+
   const addFiles = useCallback(
     (files: FileList | null, kind: AttachmentKind) => {
       if (!files || files.length === 0) return
@@ -152,29 +185,40 @@ export default function Composer() {
         setNotice(`You can attach up to ${MAX_ATTACHMENTS} files to one post.`)
         return
       }
-      const selected = Array.from(files).slice(0, room)
-      const next: Attachment[] = []
-      for (const file of selected) {
+      const accepted: PendingFile[] = []
+      for (const file of Array.from(files).slice(0, room)) {
         const validation = validateFile(file, kind)
         if (validation) {
           setNotice(validation)
           continue
         }
-        next.push({
-          localId: `local_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-          file,
-          kind,
-          status: 'uploading',
-          progress: 0,
-          previewUrl: URL.createObjectURL(file),
-        })
+        accepted.push({ file, kind, large: kind === 'video' && file.size > VIDEO_RECOMMENDED_MAX_BYTES })
       }
-      if (next.length === 0) return
-      setAttachments((current) => [...current, ...next])
-      for (const attachment of next) void uploadAttachment(attachment)
+      if (accepted.length === 0) return
+      if (accepted.some((item) => item.large)) {
+        setPendingLarge(accepted)
+        return
+      }
+      startUploads(accepted, false)
     },
-    [uploadAttachment, validateFile]
+    [startUploads, validateFile]
   )
+
+  const confirmLargeVideos = useCallback(() => {
+    if (!pendingLarge) return
+    setPendingLarge(null)
+    startUploads(pendingLarge, true)
+  }, [pendingLarge, startUploads])
+
+  const declineLargeVideos = useCallback(() => {
+    if (!pendingLarge) return
+    setPendingLarge(null)
+    const small = pendingLarge.filter((item) => !item.large)
+    setNotice(
+      `Large video not added. Choose a video up to ${formatMegabytes(VIDEO_RECOMMENDED_MAX_BYTES)}, or confirm the warning to upload it anyway.`
+    )
+    startUploads(small, false)
+  }, [pendingLarge, startUploads])
 
   const removeAttachment = useCallback(
     (localId: string) => {
@@ -357,7 +401,7 @@ export default function Composer() {
                 </div>
                 <div className="composer-attachment-body">
                   <strong>{attachment.file.name}</strong>
-                  <small>{attachmentLabel(attachment.kind)}</small>
+                  <small>{attachmentLabel(attachment)}</small>
                   {attachment.status === 'uploading' ? (
                     <div className="composer-progress">
                       <span style={{ width: `${attachment.progress}%` }} />
@@ -446,9 +490,18 @@ export default function Composer() {
 
         <p className="composer-hint">
           Uploads are validated on the server too. Media is stored in Joblite's R2 bucket and only attached after you
-          publish. Videos play with the browser's native controls in the feed and the full-screen viewer.
+          publish. Videos play with the browser's native controls in the feed and the full-screen viewer. Videos over{' '}
+          {formatMegabytes(VIDEO_RECOMMENDED_MAX_BYTES)} need your confirmation before they upload.
         </p>
       </main>
+
+      {pendingLarge ? (
+        <LargeVideoDialog
+          files={pendingLarge.filter((item) => item.large).map(({ file }) => ({ name: file.name, size: file.size }))}
+          onConfirm={confirmLargeVideos}
+          onCancel={declineLargeVideos}
+        />
+      ) : null}
     </div>
   )
 }
